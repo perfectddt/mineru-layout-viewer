@@ -34,6 +34,10 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Image review cards** — render image assets from the ZIP and map them to PDF image blocks by path
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
 - **Replace / soft-delete / undo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
+- **Editable Markdown review** — double-click a text line, convert an image to text, or edit the full Markdown source
+- **Find and replace** — find next, replace one, or replace all without losing PDF mapping
+- **Independent zoom** — PDF fit-page/fit-width/custom zoom and separate Markdown/image zoom
+- **Persistent layout boxes** — text, image, and removed/unreferenced image boxes use distinct always-visible colors
 - **Edited ZIP export** — download a new ZIP with edited Markdown, replacement assets, and `review_edits.json`
 
 ### Installation
@@ -214,6 +218,10 @@ MIT
 - **图片审核卡片** — 显示 ZIP 内的真实图片，并通过图片路径与 PDF 图片框精确关联
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
+- **Markdown 审校编辑** — 双击文字行编辑、把图片改为文字，或打开全文源码编辑
+- **查找替换** — 支持查找下一处、替换当前和全部替换，同时保留 PDF 映射
+- **左右独立缩放** — PDF 支持整页、页宽和自定义缩放，Markdown 与图片可单独缩放
+- **框常显与状态配色** — 文字、图片、已删除或未引用图片使用不同颜色且始终可见
 - **导出修改版 ZIP** — 导出修改后的 Markdown、图片以及 `review_edits.json` 操作记录
 
 ### 安装

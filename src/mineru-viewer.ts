@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import { parseBlocks, normalizeAssetPath } from './parse-blocks.js'
-import { matchMarkdownToPdf, normalize, lcsSimilarity } from './match-markdown.js'
+import { matchMarkdownToPdf, matchSectionsToPdf, normalize, lcsSimilarity } from './match-markdown.js'
+import { parseMarkdownSections } from './parse-markdown.js'
 import type { PdfBlock, MdSection } from './parse-blocks.js'
 
 declare const pdfjsLib: typeof import('pdfjs-dist')
@@ -16,8 +17,9 @@ interface PdfPageState {
 }
 
 interface ReviewEdit {
-  type: 'replace-image' | 'remove-image-reference'
+  type: 'replace-image' | 'remove-image-reference' | 'image-to-text' | 'edit-markdown' | 'replace-text'
   imagePath?: string
+  detail?: string
   timestamp: string
 }
 
@@ -26,13 +28,16 @@ type UndoAction =
   | { type: 'restore-image'; zipPath: string; data: Uint8Array }
 
 const STYLES = `
-:host { display:flex; flex-direction:column; height:100%; font-family:system-ui,sans-serif; color:#1f2937; background:#fff; }
+:host { position:relative; display:flex; flex-direction:column; height:100%; font-family:system-ui,sans-serif; color:#1f2937; background:#fff; }
 * { box-sizing:border-box; }
 .toolbar { display:flex; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid #e5e7eb; font-size:12px; color:#6b7280; flex-shrink:0; flex-wrap:wrap; }
 .toolbar .spacer { flex:1; }
 .toolbar .ok { color:#16a34a; }
 .toolbar .warn { color:#d97706; }
 .toolbar .dirty { color:#b45309; font-weight:600; }
+.toolbar-group { display:flex; align-items:center; gap:4px; padding-left:7px; border-left:1px solid #e5e7eb; }
+.toolbar-label { color:#6b7280; }
+.zoom-value { min-width:42px; text-align:center; color:#374151; }
 button { border:1px solid #d1d5db; border-radius:5px; padding:5px 9px; background:#fff; color:#374151; cursor:pointer; font:inherit; }
 button:hover:not(:disabled) { border-color:#3b82f6; color:#1d4ed8; background:#eff6ff; }
 button:disabled { cursor:not-allowed; opacity:.45; }
@@ -40,16 +45,17 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .split { flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; overflow:hidden; }
 .pane { overflow:auto; padding:10px; }
 .pane-left { border-right:1px solid #e5e7eb; background:#f8fafc; }
-.pane-right { background:#fff; }
+.pane-right { background:#fff; --md-zoom:1; --md-image-width:100%; --md-image-height:520px; }
 .pdf-page { position:relative; margin:0 auto 12px; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
 .pdf-page > canvas { display:block; width:100%; height:100%; }
 .pdf-placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#9ca3af; font-size:12px; }
 .pdf-page .page-num { position:absolute; bottom:2px; right:4px; font-size:9px; color:#6b7280; background:rgba(255,255,255,.9); padding:1px 4px; border-radius:3px; }
-.block-overlay { position:absolute; border:1px solid transparent; cursor:pointer; transition:all .12s; }
-.block-overlay.image-block { border-color:rgba(245,158,11,.25); background:rgba(245,158,11,.04); }
+.block-overlay { position:absolute; border:1px solid rgba(37,99,235,.58); background:rgba(37,99,235,.035); cursor:pointer; transition:all .12s; }
+.block-overlay.image-block { border:2px solid rgba(245,158,11,.78); background:rgba(245,158,11,.06); }
+.block-overlay.missing-image { border:2px dashed #dc2626; background:rgba(220,38,38,.12); }
 .block-overlay:hover { border-color:#f59e0b; background:rgba(245,158,11,.12); }
 .block-overlay.active { border-color:#2563eb!important; background:rgba(37,99,235,.18)!important; z-index:10; box-shadow:0 0 0 1px #2563eb; }
-.md-line { display:block; cursor:pointer; padding:3px 8px; border-radius:4px; border-left:2px solid transparent; font-size:13px; line-height:1.55; font-family:'Cascadia Code',Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
+.md-line { display:block; cursor:pointer; padding:3px 8px; border-radius:4px; border-left:2px solid transparent; font-size:calc(13px * var(--md-zoom)); line-height:1.55; font-family:'Cascadia Code',Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
 .md-line.match { border-left-color:rgba(245,158,11,.4); }
 .md-line.match:hover { background:rgba(245,158,11,.08); }
 .md-line.no-match { color:#9ca3af; }
@@ -57,17 +63,35 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .badge { display:inline-block; font-size:10px; color:#6b7280; margin-left:6px; font-family:system-ui,sans-serif; }
 .image-card { border:1px solid #e5e7eb; border-left:3px solid #f59e0b; border-radius:7px; margin:8px 0; overflow:hidden; background:#fff; cursor:pointer; }
 .image-preview { min-height:90px; display:flex; align-items:center; justify-content:center; padding:10px; background:#f8fafc; }
-.image-preview img { display:block; max-width:100%; max-height:520px; object-fit:contain; }
+.image-preview img { display:block; max-width:var(--md-image-width); max-height:var(--md-image-height); object-fit:contain; }
 .image-error { color:#b91c1c; font-size:12px; padding:16px; word-break:break-all; }
 .image-meta { display:flex; align-items:center; gap:7px; padding:7px 9px; border-top:1px solid #e5e7eb; font-size:11px; color:#6b7280; }
 .image-path { flex:1; min-width:0; font-family:'Cascadia Code',Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .image-actions { display:flex; gap:6px; padding:0 9px 9px; justify-content:flex-end; }
+.find-bar { display:none; align-items:center; gap:6px; padding:7px 10px; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex-shrink:0; }
+.find-bar.open { display:flex; }
+.find-bar input { min-width:120px; flex:1; max-width:280px; border:1px solid #d1d5db; border-radius:5px; padding:6px 8px; font:12px system-ui,sans-serif; }
+.find-result { min-width:80px; font-size:11px; color:#6b7280; }
+.legend { display:flex; align-items:center; gap:8px; font-size:10px; color:#6b7280; }
+.legend i { display:inline-block; width:12px; height:8px; margin-right:3px; vertical-align:middle; border:1px solid #2563eb; }
+.legend .visual { border:2px solid #f59e0b; }
+.legend .removed { border:2px dashed #dc2626; background:rgba(220,38,38,.12); }
+.editor-backdrop { position:absolute; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.42); }
+.editor-dialog { width:min(850px,96%); max-height:92%; display:flex; flex-direction:column; border:1px solid #cbd5e1; border-radius:9px; background:#fff; box-shadow:0 20px 45px rgba(15,23,42,.28); overflow:hidden; }
+.editor-title { padding:10px 12px; font-weight:600; border-bottom:1px solid #e5e7eb; }
+.editor-tools { display:flex; gap:5px; align-items:center; padding:7px 10px; border-bottom:1px solid #e5e7eb; }
+.editor-tools .code-tab { color:#2563eb; background:#eff6ff; }
+.editor-area { width:100%; min-height:150px; max-height:62vh; resize:vertical; border:0; outline:0; padding:12px; font:14px/1.65 'Cascadia Code',Consolas,monospace; color:#111827; }
+.editor-dialog.full .editor-area { min-height:58vh; }
+.editor-actions { display:flex; justify-content:flex-end; gap:8px; padding:9px 11px; border-top:1px solid #e5e7eb; }
+.editor-actions .save { background:#111827; color:#fff; border-color:#111827; }
+.pane-shell { min-height:0; position:relative; display:flex; flex-direction:column; }
 .empty { display:flex; align-items:center; justify-content:center; height:100%; color:#9ca3af; text-align:center; padding:30px; }
 @media (prefers-color-scheme:dark) {
   :host { color:#e5e7eb; background:#111827; }
-  .toolbar,.pane-left,.image-meta { border-color:#374151; }
+  .toolbar,.toolbar-group,.find-bar,.pane-left,.image-meta,.editor-title,.editor-tools,.editor-actions { border-color:#374151; }
   .pane-left,.image-preview { background:#111827; }
-  .pane-right,.image-card,.pdf-page,button { background:#1f2937; color:#e5e7eb; }
+  .pane-right,.image-card,.pdf-page,button,.editor-dialog,.editor-area,.find-bar { background:#1f2937; color:#e5e7eb; }
   .image-card { border-color:#374151; border-left-color:#f59e0b; }
   .image-meta { color:#9ca3af; }
 }
@@ -95,6 +119,12 @@ export class MineruLayoutViewer extends HTMLElement {
   private imageObserver: IntersectionObserver | null = null
   private pdfPageObserver: IntersectionObserver | null = null
   private rebuildSequence = 0
+  private pdfZoom = 1
+  private markdownZoom = 1
+  private pdfFitMode: 'width' | 'page' | 'custom' = 'width'
+  private findCursor = 0
+  private currentFindStart = -1
+  private resizeTimer: ReturnType<typeof setTimeout> | null = null
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
@@ -110,6 +140,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   disconnectedCallback() {
     this.resizeObserver?.disconnect()
+    if (this.resizeTimer) clearTimeout(this.resizeTimer)
     this.imageObserver?.disconnect()
     this.pdfPageObserver?.disconnect()
     void this.pdfDocument?.destroy()
@@ -277,12 +308,14 @@ export class MineruLayoutViewer extends HTMLElement {
 
     this.reviewEdits.pop()
     if (action.type === 'restore-markdown') {
+      const previousSections = this.sections
       this.markdownText = action.markdown
-      this.rebuildMarkdownOnly()
+      this.refreshSectionsPreservingMatches(previousSections)
+      this.rebuildMarkdownView()
     } else if (this.zip) {
       this.zip.file(action.zipPath, action.data)
       this.revokeAssetUrl(action.zipPath)
-      this.buildMarkdown()
+      this.rebuildMarkdownView()
     }
     this.updateToolbar()
   }
@@ -294,8 +327,34 @@ export class MineruLayoutViewer extends HTMLElement {
         <span id="stat">加载 MinerU ZIP 以开始</span>
         <span id="dirty"></span>
         <span class="spacer"></span>
+        <div class="legend"><span><i></i>文字</span><span><i class="visual"></i>图片</span><span><i class="removed"></i>已删/未引用</span></div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">PDF</span>
+          <button id="pdfZoomOut" title="缩小 PDF">−</button>
+          <span id="pdfZoomValue" class="zoom-value">适合宽度</span>
+          <button id="pdfZoomIn" title="放大 PDF">＋</button>
+          <button id="fitPage">整页</button>
+          <button id="fitWidth">页宽</button>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">右侧</span>
+          <button id="mdZoomOut" title="缩小 Markdown">−</button>
+          <span id="mdZoomValue" class="zoom-value">100%</span>
+          <button id="mdZoomIn" title="放大 Markdown">＋</button>
+        </div>
+        <button id="toggleFind">查找替换</button>
+        <button id="editAll">全文编辑</button>
         <button id="undo" disabled>撤销</button>
         <button id="export" disabled>导出修改版 ZIP</button>
+      </div>
+      <div class="find-bar" id="findBar">
+        <input id="findText" placeholder="查找文字（Ctrl+F）">
+        <input id="replaceText" placeholder="替换为">
+        <button id="findNext">下一处</button>
+        <button id="replaceOne">替换当前</button>
+        <button id="replaceAll">全部替换</button>
+        <span id="findResult" class="find-result"></span>
+        <button id="closeFind" title="关闭">×</button>
       </div>
       <div class="split">
         <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
@@ -308,11 +367,33 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('export')!.addEventListener('click', () => {
       void this.exportEditedZip()
     })
+    this.shadowRoot.getElementById('pdfZoomOut')!.addEventListener('click', () => this.changePdfZoom(-0.1))
+    this.shadowRoot.getElementById('pdfZoomIn')!.addEventListener('click', () => this.changePdfZoom(0.1))
+    this.shadowRoot.getElementById('fitPage')!.addEventListener('click', () => this.setPdfFitMode('page'))
+    this.shadowRoot.getElementById('fitWidth')!.addEventListener('click', () => this.setPdfFitMode('width'))
+    this.shadowRoot.getElementById('mdZoomOut')!.addEventListener('click', () => this.changeMarkdownZoom(-0.1))
+    this.shadowRoot.getElementById('mdZoomIn')!.addEventListener('click', () => this.changeMarkdownZoom(0.1))
+    this.shadowRoot.getElementById('toggleFind')!.addEventListener('click', () => this.toggleFindBar(true))
+    this.shadowRoot.getElementById('closeFind')!.addEventListener('click', () => this.toggleFindBar(false))
+    this.shadowRoot.getElementById('findNext')!.addEventListener('click', () => this.findNext())
+    this.shadowRoot.getElementById('replaceOne')!.addEventListener('click', () => this.replaceCurrentMatch())
+    this.shadowRoot.getElementById('replaceAll')!.addEventListener('click', () => this.replaceAllMatches())
+    this.shadowRoot.getElementById('editAll')!.addEventListener('click', () => this.openMarkdownEditor())
+    this.shadowRoot.addEventListener('keydown', event => {
+      const keyboardEvent = event as KeyboardEvent
+      if ((keyboardEvent.ctrlKey || keyboardEvent.metaKey) && keyboardEvent.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        this.toggleFindBar(true)
+      }
+    })
   }
 
   private setupResize() {
     this.resizeObserver?.disconnect()
-    this.resizeObserver = new ResizeObserver(() => this.buildPdfOverlays())
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.resizeTimer) clearTimeout(this.resizeTimer)
+      this.resizeTimer = setTimeout(() => this.rebuildPdfPreservingPosition(), 100)
+    })
     const pane = this.shadowRoot?.getElementById('pdfPane')
     if (pane) this.resizeObserver.observe(pane)
   }
@@ -345,11 +426,13 @@ export class MineruLayoutViewer extends HTMLElement {
     this.buildUI()
   }
 
-  private rebuildMarkdownOnly() {
-    this.sections = matchMarkdownToPdf(this.markdownText || '', this.blocks)
+  private rebuildMarkdownView() {
+    const pane = this.shadowRoot?.getElementById('mdPane')
+    const scrollTop = pane?.scrollTop || 0
     this.activeIdx = null
     this.buildMarkdown()
-    this.buildPdfOverlays()
+    if (pane) pane.scrollTop = scrollTop
+    this.updateOverlayStates()
     this.updateToolbar()
   }
 
@@ -392,18 +475,36 @@ export class MineruLayoutViewer extends HTMLElement {
     dirty.textContent = this.reviewEdits.length ? `已修改 ${this.reviewEdits.length} 项` : ''
     ;(shadow.getElementById('undo') as HTMLButtonElement).disabled = this.undoStack.length === 0
     ;(shadow.getElementById('export') as HTMLButtonElement).disabled = !this.zip
+    const pdfZoomValue = shadow.getElementById('pdfZoomValue')
+    if (pdfZoomValue) {
+      pdfZoomValue.textContent = this.pdfFitMode === 'page'
+        ? '适合整页'
+        : this.pdfFitMode === 'width' ? '适合宽度' : `${Math.round(this.pdfZoom * 100)}%`
+    }
+    const mdZoomValue = shadow.getElementById('mdZoomValue')
+    if (mdZoomValue) mdZoomValue.textContent = `${Math.round(this.markdownZoom * 100)}%`
   }
 
   private buildPdfOverlays() {
     const pane = this.shadowRoot?.getElementById('pdfPane')
     if (!pane) return
+    this.pdfPageObserver?.disconnect()
     pane.innerHTML = ''
-    const containerWidth = pane.clientWidth - 20
-    if (containerWidth <= 0 || this.pages.length === 0) return
+    const availableWidth = pane.clientWidth - 20
+    const availableHeight = pane.clientHeight - 24
+    if (availableWidth <= 0 || this.pages.length === 0) return
+    const referencedImages = new Set(this.sections
+      .filter(section => section.imagePath)
+      .map(section => normalizeAssetPath(section.imagePath!)))
 
     for (const renderedPage of this.pages) {
-      const cssWidth = containerWidth
-      const cssHeight = renderedPage.h * (containerWidth / renderedPage.w)
+      let cssWidth = availableWidth
+      if (this.pdfFitMode === 'page') {
+        cssWidth = Math.min(availableWidth, availableHeight * (renderedPage.w / renderedPage.h))
+      } else if (this.pdfFitMode === 'custom') {
+        cssWidth = availableWidth * this.pdfZoom
+      }
+      const cssHeight = renderedPage.h * (cssWidth / renderedPage.w)
       const pageBlocks = this.blocks.filter(block => block.page_idx === renderedPage.p - 1)
 
       const wrapper = document.createElement('div')
@@ -425,7 +526,11 @@ export class MineruLayoutViewer extends HTMLElement {
       for (const block of pageBlocks) {
         const [x0, y0, x1, y1] = block.bbox
         const overlay = document.createElement('div')
-        overlay.className = 'block-overlay' + (block.imagePath ? ' image-block' : '')
+        const imagePath = block.imagePath ? normalizeAssetPath(block.imagePath) : ''
+        const missingImage = imagePath && !referencedImages.has(imagePath)
+        overlay.className = 'block-overlay'
+          + (block.imagePath ? ' image-block' : '')
+          + (missingImage ? ' missing-image' : '')
         overlay.style.left = `${x0 * cssWidth}px`
         overlay.style.top = `${y0 * cssHeight}px`
         overlay.style.width = `${Math.max((x1 - x0) * cssWidth, 2)}px`
@@ -438,6 +543,58 @@ export class MineruLayoutViewer extends HTMLElement {
       pane.appendChild(wrapper)
       this.observePdfPage(wrapper)
     }
+  }
+
+  private updateOverlayStates() {
+    const shadow = this.shadowRoot
+    if (!shadow) return
+    const referencedImages = new Set(this.sections
+      .filter(section => section.imagePath)
+      .map(section => normalizeAssetPath(section.imagePath!)))
+    const blocksById = new Map(this.blocks.map(block => [block.id, block]))
+    shadow.querySelectorAll('.block-overlay.image-block').forEach(element => {
+      const overlay = element as HTMLElement
+      const block = blocksById.get(overlay.dataset.blockId || '')
+      const missing = Boolean(block?.imagePath)
+        && !referencedImages.has(normalizeAssetPath(block!.imagePath!))
+      overlay.classList.toggle('missing-image', missing)
+    })
+  }
+
+  private rebuildPdfPreservingPosition() {
+    const pane = this.shadowRoot?.getElementById('pdfPane')
+    if (!pane || !this.pages.length) return
+    const wrappers = Array.from(pane.querySelectorAll('.pdf-page')) as HTMLElement[]
+    const anchor = wrappers.find(page => page.offsetTop + page.offsetHeight >= pane.scrollTop)
+    const pageNumber = Number(anchor?.dataset.page || 1)
+    const ratio = anchor
+      ? Math.max(0, (pane.scrollTop - anchor.offsetTop) / Math.max(anchor.offsetHeight, 1))
+      : 0
+    this.buildPdfOverlays()
+    const nextAnchor = pane.querySelector(`.pdf-page[data-page="${pageNumber}"]`) as HTMLElement | null
+    if (nextAnchor) pane.scrollTop = nextAnchor.offsetTop + ratio * nextAnchor.offsetHeight
+  }
+
+  private changePdfZoom(delta: number) {
+    this.pdfFitMode = 'custom'
+    this.pdfZoom = Math.min(3, Math.max(0.35, Number((this.pdfZoom + delta).toFixed(2))))
+    this.rebuildPdfPreservingPosition()
+    this.updateToolbar()
+  }
+
+  private setPdfFitMode(mode: 'width' | 'page') {
+    this.pdfFitMode = mode
+    this.rebuildPdfPreservingPosition()
+    this.updateToolbar()
+  }
+
+  private changeMarkdownZoom(delta: number) {
+    this.markdownZoom = Math.min(2.2, Math.max(0.6, Number((this.markdownZoom + delta).toFixed(2))))
+    const pane = this.shadowRoot?.getElementById('mdPane')
+    pane?.style.setProperty('--md-zoom', String(this.markdownZoom))
+    pane?.style.setProperty('--md-image-width', `${Math.round(this.markdownZoom * 100)}%`)
+    pane?.style.setProperty('--md-image-height', `${Math.round(520 * this.markdownZoom)}px`)
+    this.updateToolbar()
   }
 
   private observePdfPage(wrapper: HTMLElement) {
@@ -531,6 +688,7 @@ export class MineruLayoutViewer extends HTMLElement {
       } else {
         const line = document.createElement('span')
         line.className = 'md-line ' + (section.bbox ? 'match' : 'no-match')
+        line.tabIndex = 0
         line.dataset.idx = String(index)
         line.textContent = section.text
         if (section.bbox) {
@@ -540,6 +698,11 @@ export class MineruLayoutViewer extends HTMLElement {
           line.appendChild(badge)
         }
         line.addEventListener('click', () => this.onMdClick(section, index, line))
+        line.addEventListener('dblclick', event => {
+          event.preventDefault()
+          this.openSectionEditor(section, false)
+        })
+        line.title = '单击定位 PDF；双击编辑此行'
         pane.appendChild(line)
       }
     }
@@ -548,6 +711,7 @@ export class MineruLayoutViewer extends HTMLElement {
   private createImageCard(section: MdSection, index: number): HTMLElement {
     const card = document.createElement('article')
     card.className = 'image-card' + (section.bbox ? ' match' : ' no-match')
+    card.tabIndex = 0
     card.dataset.idx = String(index)
     card.dataset.imagePath = section.imagePath
 
@@ -579,6 +743,12 @@ export class MineruLayoutViewer extends HTMLElement {
       event.stopPropagation()
       this.chooseReplacement(section)
     })
+    const toTextButton = document.createElement('button')
+    toTextButton.textContent = '改为文字'
+    toTextButton.addEventListener('click', event => {
+      event.stopPropagation()
+      this.openSectionEditor(section, true)
+    })
     const removeButton = document.createElement('button')
     removeButton.className = 'danger'
     removeButton.textContent = '从 Markdown 删除'
@@ -586,7 +756,7 @@ export class MineruLayoutViewer extends HTMLElement {
       event.stopPropagation()
       this.removeImageReference(section)
     })
-    actions.append(replaceButton, removeButton)
+    actions.append(replaceButton, toTextButton, removeButton)
     card.appendChild(actions)
 
     card.addEventListener('click', () => this.onMdClick(section, index, card))
@@ -726,22 +896,280 @@ export class MineruLayoutViewer extends HTMLElement {
       imagePath: section.imagePath,
       timestamp: new Date().toISOString(),
     })
-    this.buildMarkdown()
+    this.rebuildMarkdownView()
     this.updateToolbar()
   }
 
   private removeImageReference(section: MdSection) {
     if (this.markdownText == null) return
-    this.undoStack.push({ type: 'restore-markdown', markdown: this.markdownText })
-    this.markdownText =
-      this.markdownText.slice(0, section.start)
-      + this.markdownText.slice(section.end)
-    this.reviewEdits.push({
+    this.replaceMarkdownRange(section.start, section.end, '', {
       type: 'remove-image-reference',
       imagePath: section.imagePath,
       timestamp: new Date().toISOString(),
     })
-    this.rebuildMarkdownOnly()
+  }
+
+  private openSectionEditor(section: MdSection, imageToText: boolean) {
+    this.showEditor({
+      title: imageToText ? '将图片改为文字' : '编辑 Markdown 行',
+      value: imageToText ? '' : section.raw,
+      placeholder: imageToText ? '输入用来替代这张图片的文字或 Markdown…' : '',
+      full: false,
+      onSave: value => {
+        if (imageToText && !value.trim()) {
+          alert('请输入替代文字；如果只想删除图片，请使用“从 Markdown 删除”。')
+          return false
+        }
+        const source = this.markdownText?.slice(section.start, section.end) || ''
+        const newline = source.match(/\r?\n$/)?.[0] || ''
+        this.replaceMarkdownRange(section.start, section.end, value + newline, {
+          type: imageToText ? 'image-to-text' : 'edit-markdown',
+          imagePath: imageToText ? section.imagePath : undefined,
+          detail: imageToText ? value.slice(0, 120) : 'edited one Markdown line',
+          timestamp: new Date().toISOString(),
+        })
+        return true
+      },
+    })
+  }
+
+  private openMarkdownEditor() {
+    if (this.markdownText == null) return
+    this.showEditor({
+      title: '全文 Markdown 编辑',
+      value: this.markdownText,
+      full: true,
+      onSave: value => {
+        if (value === this.markdownText) return true
+        this.replaceMarkdownRange(0, this.markdownText!.length, value, {
+          type: 'edit-markdown',
+          detail: 'edited full Markdown source',
+          timestamp: new Date().toISOString(),
+        })
+        return true
+      },
+    })
+  }
+
+  private showEditor(options: {
+    title: string
+    value: string
+    placeholder?: string
+    full: boolean
+    onSave: (value: string) => boolean
+  }) {
+    const shadow = this.shadowRoot
+    if (!shadow) return
+    shadow.querySelector('.editor-backdrop')?.remove()
+
+    const backdrop = document.createElement('div')
+    backdrop.className = 'editor-backdrop'
+    const dialog = document.createElement('section')
+    dialog.className = 'editor-dialog' + (options.full ? ' full' : '')
+    const title = document.createElement('div')
+    title.className = 'editor-title'
+    title.textContent = options.title
+    const tools = document.createElement('div')
+    tools.className = 'editor-tools'
+    const textarea = document.createElement('textarea')
+    textarea.className = 'editor-area'
+    textarea.value = options.value
+    textarea.placeholder = options.placeholder || ''
+
+    const toolDefinitions: Array<[string, string, string]> = [
+      ['CODE', '', ''], ['标题', '## ', ''], ['B', '**', '**'], ['I', '*', '*'], ['S', '~~', '~~'], ['引用', '> ', ''], ['链接', '[', '](https://)'],
+    ]
+    for (const [label, prefix, suffix] of toolDefinitions) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = label
+      if (label === 'CODE') {
+        button.className = 'code-tab'
+        button.disabled = true
+      } else {
+        button.addEventListener('click', () => this.wrapEditorSelection(textarea, prefix, suffix))
+      }
+      tools.appendChild(button)
+    }
+
+    const actions = document.createElement('div')
+    actions.className = 'editor-actions'
+    const cancel = document.createElement('button')
+    cancel.textContent = '取消'
+    const save = document.createElement('button')
+    save.className = 'save'
+    save.textContent = '保存'
+    const close = () => backdrop.remove()
+    cancel.addEventListener('click', close)
+    save.addEventListener('click', () => {
+      if (options.onSave(textarea.value)) close()
+    })
+    actions.append(save, cancel)
+    dialog.append(title, tools, textarea, actions)
+    backdrop.appendChild(dialog)
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) close()
+    })
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape') close()
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault()
+        save.click()
+      }
+    })
+    shadow.appendChild(backdrop)
+    textarea.focus()
+    if (!options.full) textarea.select()
+  }
+
+  private wrapEditorSelection(textarea: HTMLTextAreaElement, prefix: string, suffix: string) {
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const selected = textarea.value.slice(start, end)
+    if ((prefix === '## ' || prefix === '> ') && start > 0) {
+      const lineStart = textarea.value.lastIndexOf('\n', start - 1) + 1
+      textarea.setRangeText(prefix, lineStart, lineStart, 'end')
+      textarea.focus()
+      return
+    }
+    textarea.setRangeText(prefix + selected + suffix, start, end, 'select')
+    textarea.selectionStart = start + prefix.length
+    textarea.selectionEnd = start + prefix.length + selected.length
+    textarea.focus()
+  }
+
+  private replaceMarkdownRange(start: number, end: number, replacement: string, edit: ReviewEdit) {
+    if (this.markdownText == null) return
+    const previousMarkdown = this.markdownText
+    const previousSections = this.sections
+    this.undoStack.push({ type: 'restore-markdown', markdown: previousMarkdown })
+    this.markdownText = previousMarkdown.slice(0, start) + replacement + previousMarkdown.slice(end)
+    this.reviewEdits.push(edit)
+    this.refreshSectionsPreservingMatches(previousSections)
+    this.rebuildMarkdownView()
+  }
+
+  private refreshSectionsPreservingMatches(previous: MdSection[]) {
+    const next = parseMarkdownSections(this.markdownText || '')
+    let prefix = 0
+    while (prefix < previous.length && prefix < next.length && previous[prefix].raw === next[prefix].raw) prefix++
+    let suffix = 0
+    while (
+      suffix < previous.length - prefix
+      && suffix < next.length - prefix
+      && previous[previous.length - 1 - suffix].raw === next[next.length - 1 - suffix].raw
+    ) suffix++
+
+    const copyMatch = (target: MdSection, source: MdSection): MdSection => ({
+      ...target,
+      page: source.page,
+      bbox: source.bbox,
+      blockId: source.blockId,
+    })
+    for (let index = 0; index < prefix; index++) next[index] = copyMatch(next[index], previous[index])
+    for (let index = 0; index < suffix; index++) {
+      const nextIndex = next.length - 1 - index
+      const previousIndex = previous.length - 1 - index
+      next[nextIndex] = copyMatch(next[nextIndex], previous[previousIndex])
+    }
+
+    const oldMiddle = previous.slice(prefix, previous.length - suffix)
+    const newMiddle = next.slice(prefix, next.length - suffix)
+    if (oldMiddle.length === newMiddle.length) {
+      for (let index = 0; index < newMiddle.length; index++) {
+        next[prefix + index] = copyMatch(newMiddle[index], oldMiddle[index])
+      }
+    } else if (newMiddle.length) {
+      const matched = matchSectionsToPdf(newMiddle, this.blocks)
+      for (let index = 0; index < matched.length; index++) next[prefix + index] = matched[index]
+    }
+    this.sections = next
+  }
+
+  private toggleFindBar(open: boolean) {
+    const bar = this.shadowRoot?.getElementById('findBar')
+    bar?.classList.toggle('open', open)
+    if (open) (this.shadowRoot?.getElementById('findText') as HTMLInputElement | null)?.focus()
+  }
+
+  private findNext() {
+    const markdown = this.markdownText || ''
+    const input = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
+    const query = input?.value || ''
+    if (!query) return this.setFindResult('请输入内容')
+    const source = markdown.toLocaleLowerCase()
+    const needle = query.toLocaleLowerCase()
+    let index = source.indexOf(needle, this.findCursor)
+    if (index < 0 && this.findCursor > 0) index = source.indexOf(needle)
+    if (index < 0) {
+      this.currentFindStart = -1
+      return this.setFindResult('未找到')
+    }
+    this.currentFindStart = index
+    this.findCursor = index + Math.max(query.length, 1)
+    const sectionIndex = this.sections.findIndex(section => section.start <= index && section.end > index)
+    const element = sectionIndex >= 0
+      ? this.shadowRoot?.querySelector(`[data-idx="${sectionIndex}"]`) as HTMLElement | null
+      : null
+    if (element) {
+      this.shadowRoot?.querySelectorAll('.active').forEach(item => item.classList.remove('active'))
+      element.classList.add('active')
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    const total = source.split(needle).length - 1
+    const ordinal = source.slice(0, index).split(needle).length
+    this.setFindResult(`${ordinal}/${total}`)
+  }
+
+  private replaceCurrentMatch() {
+    const findInput = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
+    const replaceInput = this.shadowRoot?.getElementById('replaceText') as HTMLInputElement | null
+    const query = findInput?.value || ''
+    if (!query) return this.setFindResult('请输入内容')
+    if (this.currentFindStart < 0
+      || this.markdownText?.slice(this.currentFindStart, this.currentFindStart + query.length).toLocaleLowerCase() !== query.toLocaleLowerCase()) {
+      this.findNext()
+      if (this.currentFindStart < 0) return
+    }
+    const start = this.currentFindStart
+    const replacement = replaceInput?.value || ''
+    this.replaceMarkdownRange(start, start + query.length, replacement, {
+      type: 'replace-text',
+      detail: `replace one: ${query}`,
+      timestamp: new Date().toISOString(),
+    })
+    this.findCursor = start + replacement.length
+    this.currentFindStart = -1
+    this.findNext()
+  }
+
+  private replaceAllMatches() {
+    if (this.markdownText == null) return
+    const findInput = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
+    const replaceInput = this.shadowRoot?.getElementById('replaceText') as HTMLInputElement | null
+    const query = findInput?.value || ''
+    if (!query) return this.setFindResult('请输入内容')
+    const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    let count = 0
+    const replacement = replaceInput?.value || ''
+    const next = this.markdownText.replace(expression, () => {
+      count++
+      return replacement
+    })
+    if (!count) return this.setFindResult('未找到')
+    this.replaceMarkdownRange(0, this.markdownText.length, next, {
+      type: 'replace-text',
+      detail: `replace all ${count}: ${query}`,
+      timestamp: new Date().toISOString(),
+    })
+    this.currentFindStart = -1
+    this.findCursor = 0
+    this.setFindResult(`已替换 ${count} 处`)
+  }
+
+  private setFindResult(message: string) {
+    const result = this.shadowRoot?.getElementById('findResult')
+    if (result) result.textContent = message
   }
 
   private pickMarkdownPath(names: string[]): string {
