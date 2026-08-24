@@ -36,6 +36,10 @@
     { type:'image', img_path:'images/not-found.png', page_idx:0, bbox:[100,200,900,700] }
   ]))
   await viewer.loadMarkdown(markdown)
+  if (new URLSearchParams(location.search).has('phycat')) {
+    const { default: theme } = await import('../plugins/phycat-prussian-theme.js')
+    viewer.registerMarkdownRenderPlugin(theme)
+  }
   if (new URLSearchParams(location.search).has('standalone')) {
     const source = await fetch('../README.md').then(response => response.text())
     await viewer.loadMarkdownFile(new File([source], 'README.md', { type: 'text/markdown' }))

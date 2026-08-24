@@ -55,7 +55,9 @@ interface SearchResult {
 type OutlineLayout = 'side' | 'stack'
 
 interface ViewerSettings {
+  workspaceLayout: OutlineLayout
   workspaceLeftPercent: number
+  standaloneSourceSwapped: boolean
   pdfOutlineLayout: OutlineLayout
   pdfOutlineSize: number
   markdownOutlineLayout: OutlineLayout
@@ -65,7 +67,9 @@ interface ViewerSettings {
 const VIEWER_SETTINGS_KEY = 'mineru-layout-viewer-settings-v1'
 const RENDER_PLUGIN_KEY = 'mineru-layout-viewer-default-render-plugin-v1'
 const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
+  workspaceLayout: 'side',
   workspaceLeftPercent: 50,
+  standaloneSourceSwapped: false,
   pdfOutlineLayout: 'side',
   pdfOutlineSize: 33,
   markdownOutlineLayout: 'side',
@@ -98,17 +102,24 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .split { position:relative; flex:1; display:grid; grid-template-columns:var(--workspace-left, 50%) 1fr; min-height:0; overflow:hidden; }
 .split.swapped .left-column { order:2; border-right:0; border-left:1px solid #e5e7eb; }
 .split.swapped .right-column { order:1; }
+.split.workspace-stack { grid-template-columns:1fr; grid-template-rows:var(--workspace-left, 50%) 1fr; }
+.split.workspace-stack .left-column { border-right:0; border-left:0; border-bottom:1px solid #e5e7eb; }
+.split.workspace-stack.swapped .left-column { border-bottom:0; border-top:1px solid #e5e7eb; }
 .split.markdown-only { grid-template-columns:1fr; }
+.split.workspace-stack.markdown-only { grid-template-rows:1fr; }
 .split.markdown-only .left-column { display:none; }
 .workspace-divider { position:absolute; z-index:19; left:var(--workspace-left, 50%); top:0; bottom:0; width:9px; transform:translateX(-50%); cursor:col-resize; touch-action:none; }
 .workspace-divider::after { content:''; position:absolute; top:42px; bottom:0; left:4px; width:1px; background:#cbd5e1; }
 .swap-panes { position:absolute; z-index:20; left:50%; top:7px; transform:translateX(-50%); width:31px; height:28px; padding:0; border-radius:999px; box-shadow:0 2px 7px rgba(15,23,42,.14); font-size:17px; cursor:pointer; }
+.workspace-divider.stack { left:0; right:0; top:var(--workspace-left, 50%); bottom:auto; width:auto; height:9px; transform:translateY(-50%); cursor:row-resize; }
+.workspace-divider.stack::after { top:4px; bottom:auto; left:0; right:0; width:auto; height:1px; }
+.workspace-divider.stack .swap-panes { left:50%; top:50%; transform:translate(-50%,-50%); }
 .split.markdown-only .workspace-divider { display:none; }
 .pane-column { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .left-column { border-right:1px solid #e5e7eb; }
 .pane-toolbar { min-height:42px; display:flex; align-items:center; gap:5px; padding:6px 9px; border-bottom:1px solid #e5e7eb; flex-shrink:0; font-size:12px; color:#6b7280; background:#fff; }
-.split:not(.swapped) .left-column .pane-toolbar,.split.swapped .right-column .pane-toolbar { padding-right:28px; }
-.split:not(.swapped) .right-column .pane-toolbar,.split.swapped .left-column .pane-toolbar { padding-left:28px; }
+.split:not(.workspace-stack):not(.swapped) .left-column .pane-toolbar,.split:not(.workspace-stack).swapped .right-column .pane-toolbar { padding-right:28px; }
+.split:not(.workspace-stack):not(.swapped) .right-column .pane-toolbar,.split:not(.workspace-stack).swapped .left-column .pane-toolbar { padding-left:28px; }
 .pane-toolbar .spacer { flex:1; }
 .pane-toolbar button.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
 .menu-toggle { padding:4px 7px; font-size:16px; line-height:1; }
@@ -195,7 +206,9 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .source-editor-host .cm-editor { height:100%; }
 .standalone-source-split { display:grid; grid-template-columns:1fr 1fr; gap:0; width:100%; height:100%; min-height:0; }
 .standalone-source-split .source-editor-host { border-right:1px solid #dbe3ec; }
-.standalone-live-preview { height:100%; overflow:auto; padding:10px; }
+.standalone-source-split.swapped .source-editor-host { order:2; border-right:0; }
+.standalone-live-preview { height:100%; min-width:0; overflow:auto; padding:10px; }
+.standalone-source-split.swapped .standalone-live-preview { order:1; border-right:1px solid #dbe3ec; }
 .source-status { color:#2563eb; font-weight:600; }
 .settings-panel { display:none; position:absolute; z-index:50; right:10px; top:48px; width:min(350px,calc(100% - 20px)); max-height:calc(100% - 58px); overflow:auto; border:1px solid #cbd5e1; border-radius:9px; padding:12px; background:#fff; box-shadow:0 12px 34px rgba(15,23,42,.22); font-size:12px; }
 .settings-panel.open { display:block; }
@@ -727,6 +740,7 @@ export class MineruLayoutViewer extends HTMLElement {
             <strong>Markdown</strong>
             <button id="mdPreviewMode" class="active">预览</button>
             <button id="mdSourceMode">code</button>
+            <button id="swapStandaloneSource" hidden title="交换源码编辑器与渲染预览的左右位置">⇄ 编辑/渲染</button>
             <div class="toolbar-group">
               <button id="mdZoomOut" title="缩小 Markdown">−</button>
               <span id="mdZoomValue" class="zoom-value">100%</span>
@@ -767,7 +781,9 @@ export class MineruLayoutViewer extends HTMLElement {
       <aside id="settingsPanel" class="settings-panel">
         <div class="settings-header"><strong>设置</strong><span class="spacer"></span><button id="closeSettings" title="关闭">×</button></div>
         <div class="settings-group">
-          <div class="settings-row"><label for="workspaceRatio">左侧工作区</label><input id="workspaceRatio" type="range" min="20" max="80" step="1"><output id="workspaceRatioValue" class="settings-value"></output></div>
+          <strong>PDF / Markdown 主工作区</strong>
+          <div class="settings-row"><label for="workspaceLayout">排列</label><select id="workspaceLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
+          <div class="settings-row"><label for="workspaceRatio">左/上工作区</label><input id="workspaceRatio" type="range" min="20" max="80" step="1"><output id="workspaceRatioValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group">
           <strong>PDF 书签</strong>
@@ -822,6 +838,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('mdZoomIn')!.addEventListener('click', () => this.changeMarkdownZoom(0.1))
     this.shadowRoot.getElementById('mdPreviewMode')!.addEventListener('click', () => this.saveSourceAndPreview())
     this.shadowRoot.getElementById('mdSourceMode')!.addEventListener('click', () => this.switchToSourceMode())
+    this.shadowRoot.getElementById('swapStandaloneSource')!.addEventListener('click', () => this.toggleStandaloneSourceOrder())
     this.shadowRoot.getElementById('vimToggle')!.addEventListener('click', () => this.toggleVimMode())
     this.shadowRoot.getElementById('sourceSave')!.addEventListener('click', () => this.saveSourceAndPreview())
     this.shadowRoot.getElementById('sourceCancel')!.addEventListener('click', () => this.cancelSourceMode())
@@ -978,7 +995,20 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!split) return
     split.classList.toggle('swapped', this.panesSwapped && !this.standaloneMarkdown)
     split.classList.toggle('markdown-only', this.standaloneMarkdown)
+    split.classList.toggle('workspace-stack', this.viewerSettings.workspaceLayout === 'stack' && !this.standaloneMarkdown)
     split.style.setProperty('--workspace-left', `${this.viewerSettings.workspaceLeftPercent}%`)
+    const divider = this.shadowRoot?.getElementById('workspaceDivider')
+    divider?.classList.toggle('stack', this.viewerSettings.workspaceLayout === 'stack')
+    if (divider) divider.title = this.viewerSettings.workspaceLayout === 'stack'
+      ? '拖动调整上下工作区比例'
+      : '拖动调整左右工作区比例'
+    const swap = this.shadowRoot?.getElementById('swapPanes') as HTMLButtonElement | null
+    if (swap) {
+      swap.textContent = this.viewerSettings.workspaceLayout === 'stack' ? '⇅' : '⇄'
+      swap.title = this.viewerSettings.workspaceLayout === 'stack'
+        ? '交换 PDF 与 Markdown 上下位置'
+        : '交换 PDF 与 Markdown 左右位置'
+    }
     this.updateOutlineLayout('pdf')
     this.updateOutlineLayout('markdown')
     this.updateSettingsControls()
@@ -996,7 +1026,9 @@ export class MineruLayoutViewer extends HTMLElement {
     try {
       const stored = JSON.parse(localStorage.getItem(VIEWER_SETTINGS_KEY) || '{}') as Partial<ViewerSettings>
       this.viewerSettings = {
+        workspaceLayout: stored.workspaceLayout === 'stack' ? 'stack' : 'side',
         workspaceLeftPercent: this.clampPercent(stored.workspaceLeftPercent, DEFAULT_VIEWER_SETTINGS.workspaceLeftPercent, 20, 80),
+        standaloneSourceSwapped: stored.standaloneSourceSwapped === true,
         pdfOutlineLayout: stored.pdfOutlineLayout === 'stack' ? 'stack' : 'side',
         pdfOutlineSize: this.clampPercent(stored.pdfOutlineSize, DEFAULT_VIEWER_SETTINGS.pdfOutlineSize, 15, 70),
         markdownOutlineLayout: stored.markdownOutlineLayout === 'stack' ? 'stack' : 'side',
@@ -1030,6 +1062,12 @@ export class MineruLayoutViewer extends HTMLElement {
     listenRange('workspaceRatio', value => { this.viewerSettings.workspaceLeftPercent = value })
     listenRange('pdfOutlineSize', value => { this.viewerSettings.pdfOutlineSize = value })
     listenRange('mdOutlineSize', value => { this.viewerSettings.markdownOutlineSize = value })
+    const workspaceLayout = shadow.getElementById('workspaceLayout') as HTMLSelectElement
+    workspaceLayout.addEventListener('change', () => {
+      this.viewerSettings.workspaceLayout = workspaceLayout.value === 'stack' ? 'stack' : 'side'
+      this.updatePaneLayout()
+      this.saveViewerSettings()
+    })
     const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement
     pdfLayout.addEventListener('change', () => {
       this.viewerSettings.pdfOutlineLayout = pdfLayout.value === 'stack' ? 'stack' : 'side'
@@ -1056,8 +1094,10 @@ export class MineruLayoutViewer extends HTMLElement {
     setRange('workspaceRatio', 'workspaceRatioValue', this.viewerSettings.workspaceLeftPercent)
     setRange('pdfOutlineSize', 'pdfOutlineSizeValue', this.viewerSettings.pdfOutlineSize)
     setRange('mdOutlineSize', 'mdOutlineSizeValue', this.viewerSettings.markdownOutlineSize)
+    const workspaceLayout = shadow.getElementById('workspaceLayout') as HTMLSelectElement | null
     const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement | null
     const mdLayout = shadow.getElementById('mdOutlineLayout') as HTMLSelectElement | null
+    if (workspaceLayout) workspaceLayout.value = this.viewerSettings.workspaceLayout
     if (pdfLayout) pdfLayout.value = this.viewerSettings.pdfOutlineLayout
     if (mdLayout) mdLayout.value = this.viewerSettings.markdownOutlineLayout
     const pluginName = shadow.getElementById('defaultPluginName')
@@ -1085,8 +1125,11 @@ export class MineruLayoutViewer extends HTMLElement {
       divider.setPointerCapture(event.pointerId)
       const move = (moveEvent: PointerEvent) => {
         const rect = split.getBoundingClientRect()
+        const raw = this.viewerSettings.workspaceLayout === 'stack'
+          ? (moveEvent.clientY - rect.top) / rect.height * 100
+          : (moveEvent.clientX - rect.left) / rect.width * 100
         this.viewerSettings.workspaceLeftPercent = this.clampPercent(
-          (moveEvent.clientX - rect.left) / rect.width * 100, 50, 20, 80,
+          raw, 50, 20, 80,
         )
         this.updatePaneLayout()
       }
@@ -1787,7 +1830,7 @@ export class MineruLayoutViewer extends HTMLElement {
     let livePreview: HTMLElement | null = null
     if (this.standaloneMarkdown) {
       const split = document.createElement('div')
-      split.className = 'standalone-source-split'
+      split.className = `standalone-source-split${this.viewerSettings.standaloneSourceSwapped ? ' swapped' : ''}`
       livePreview = document.createElement('article')
       livePreview.className = 'standalone-live-preview md-preview'
       split.append(host, livePreview)
@@ -1901,11 +1944,25 @@ export class MineruLayoutViewer extends HTMLElement {
     this.updateModeToolbar()
   }
 
+  private toggleStandaloneSourceOrder() {
+    if (!this.standaloneMarkdown || this.markdownMode !== 'source') return
+    this.viewerSettings.standaloneSourceSwapped = !this.viewerSettings.standaloneSourceSwapped
+    this.shadowRoot?.querySelector('.standalone-source-split')
+      ?.classList.toggle('swapped', this.viewerSettings.standaloneSourceSwapped)
+    this.saveViewerSettings()
+    this.updateModeToolbar()
+  }
+
   private updateModeToolbar() {
     const shadow = this.shadowRoot
     if (!shadow) return
     shadow.getElementById('mdPreviewMode')?.classList.toggle('active', this.markdownMode === 'preview')
     shadow.getElementById('mdSourceMode')?.classList.toggle('active', this.markdownMode === 'source')
+    const sourceSwap = shadow.getElementById('swapStandaloneSource') as HTMLButtonElement | null
+    if (sourceSwap) {
+      sourceSwap.hidden = !this.standaloneMarkdown || this.markdownMode !== 'source'
+      sourceSwap.textContent = this.viewerSettings.standaloneSourceSwapped ? '⇄ 渲染/编辑' : '⇄ 编辑/渲染'
+    }
     const vimButton = shadow.getElementById('vimToggle')
     if (vimButton) vimButton.textContent = `Vim：${this.vimEnabled ? '开' : '关'}`
     ;(shadow.getElementById('sourceSave') as HTMLButtonElement | null)?.toggleAttribute('hidden', this.markdownMode !== 'source')

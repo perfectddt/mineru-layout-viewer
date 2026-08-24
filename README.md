@@ -32,9 +32,9 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Folder support** — select an uncompressed MinerU result directory directly (no ZIP required)
 - **Folder drag/drop** — recursively opens modern directory handles with a legacy WebKit fallback
 - **Stage-aware progress + ETA** — shows the active load stage and only estimates time for measurable byte/file/decompression stages
-- **Resizable workspace + outlines** — drag the PDF/Markdown split; open PDF bookmarks or Markdown headings beside the document (or switch them to stacked layout)
+- **Resizable workspace + outlines** — arrange PDF/Markdown side-by-side or top/bottom, swap their positions, and drag the split; outlines also support side/stack layouts
 - **Persistent settings** — remember workspace ratios, outline direction/size, and a trusted default render plugin
-- **Standalone Markdown editor** — preview-only reading mode, plus side-by-side CodeMirror and live rendered preview with bidirectional source/preview navigation in `code` mode
+- **Standalone Markdown editor** — preview-only reading mode, plus swappable CodeMirror/live-preview panes with bidirectional source/preview navigation in `code` mode
 - **Large PDF support** — renders PDF pages only near the viewport
 - **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
@@ -245,9 +245,9 @@ MIT
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
 - **文件夹直拖** — 支持现代目录句柄，并提供旧版 WebKit 目录递归读取后备方案
 - **分阶段动态进度** — 显示载入阶段；仅在字节读取、文件计数和解压等可测阶段估算剩余时间
-- **可拖动工作区与目录** — PDF/Markdown 分隔线可拖动；PDF 书签和 Markdown 大纲默认左右排列，也可改为上下排列并拖动大小
+- **可拖动工作区与目录** — PDF/Markdown 支持左右或上下排列、位置交换和分隔线拖动；书签/大纲也支持左右或上下排列
 - **持久化设置** — 记住主工作区比例、目录方向/大小以及可信的默认渲染插件
-- **单 Markdown 编辑器** — 预览模式仅保留一个阅读窗格，`code` 模式左右同时显示源码和实时渲染，并支持源码/渲染双向定位
+- **单 Markdown 编辑器** — 预览模式仅保留一个阅读窗格，`code` 模式同时显示可交换位置的源码和实时渲染，并支持双向定位
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销/重做** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
@@ -403,6 +403,9 @@ viewer.registerMarkdownRenderPlugin({
 作用于 `.md-preview` 的 CSS，然后点击右上角“设置”按钮，在“默认 Markdown 渲染插件”中选择该文件。插件会作为默认项保存在当前浏览器中。插件是会在
 页面中执行的 JavaScript，只加载自己信任的文件；沿用 `mineru-reading-theme` 名称会
 替换内置主题，而不是叠加两份主题。
+
+项目还提供了根据 Typora `phycat-prussian.css` 改编的自包含主题：
+`plugins/phycat-prussian-theme.js`。它不依赖 Typora 的本地字体或相对路径，可直接在上述设置中加载并设为默认主题。
 
 要覆盖保存本地 `full.md`，必须通过“选择结果文件夹”打开目录并授予读写权限。
 旧式文件夹上传和 ZIP 模式只能导出修改版 ZIP，不能原位覆盖。浏览器目录写入功能
