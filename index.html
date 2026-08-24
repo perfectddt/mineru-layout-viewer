@@ -65,8 +65,29 @@ document.getElementById('chooseZip').addEventListener('click', e => {
   input.click()
 })
 
-document.getElementById('chooseFolder').addEventListener('click', e => {
+document.getElementById('chooseFolder').addEventListener('click', async e => {
   e.stopPropagation()
+  if ('showDirectoryPicker' in window) {
+    let handle
+    try {
+      handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'mineru-result-folder' })
+    } catch (error) {
+      if (error?.name === 'AbortError') return
+      console.warn('可写目录选择不可用，回退到只读选择', error)
+    }
+    if (handle) {
+      try {
+        loadStatus.textContent = `正在读取可写文件夹：${handle.name}`
+        dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+        await viewer.loadDirectoryHandle(handle)
+        return
+      } catch (error) {
+        viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
+        alert(error instanceof Error ? error.message : String(error))
+        return
+      }
+    }
+  }
   const input = document.createElement('input')
   input.type = 'file'; input.webkitdirectory = true; input.multiple = true
   input.onchange = () => handleDirectory(input.files)

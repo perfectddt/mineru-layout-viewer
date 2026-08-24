@@ -161,12 +161,14 @@ interface MdSection {
 |-----------------------------------------|---------------------------------------|
 | `loadZip(blob: Blob): Promise<void>`    | Load from a MinerU export .zip        |
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | Load an uncompressed MinerU result folder |
+| `loadDirectoryHandle(handle): Promise<void>` | Load a folder with read/write permission |
 | `loadLayoutFromJson(data: object\|string)`| Load layout JSON directly           |
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
 | `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
 | `exportEditedZip(): Promise<void>`       | Download the edited result ZIP         |
 | `registerMarkdownRenderPlugin(plugin)`   | Add Markdown-it rules, preview styles, or post-render hooks |
 | `registerMarkdownEditorPlugin(plugin)`   | Add a CodeMirror 6 editor extension     |
+| `loadMarkdownRenderPlugin(file)`         | Load a trusted local `.js`/`.mjs` render plugin |
 
 ```js
 viewer.registerMarkdownRenderPlugin({
@@ -175,6 +177,12 @@ viewer.registerMarkdownRenderPlugin({
   configure(markdownIt) { markdownIt.set({ breaks: true }) },
 })
 ```
+
+The viewer enables sanitized HTML (`<br>`, HTML tables), GFM tables, task lists,
+footnotes and KaTeX by default. To customize the appearance, copy
+`plugins/ocean-reading-theme.js`, change its scoped `.md-preview` CSS, then click
+**Load render plugin**. A plugin is JavaScript and runs in the page, so only load
+files you trust. Reuse the name `mineru-reading-theme` to replace the built-in theme.
 
 ### Image edit semantics
 
@@ -357,12 +365,14 @@ interface MdSection {
 |-----------------------------------------|-----------------------------|
 | `loadZip(blob: Blob): Promise<void>`    | 从 Mineru 导出 .zip 加载    |
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | 直接加载未压缩的 MinerU 结果文件夹 |
+| `loadDirectoryHandle(handle): Promise<void>` | 以可读写权限打开结果文件夹 |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
 | `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
 | `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
 | `registerMarkdownRenderPlugin(plugin)`   | 注册 Markdown-it 规则、预览样式或渲染后钩子 |
 | `registerMarkdownEditorPlugin(plugin)`   | 注册 CodeMirror 6 编辑扩展   |
+| `loadMarkdownRenderPlugin(file)`         | 加载可信的本地 `.js`/`.mjs` 渲染插件 |
 
 ```js
 viewer.registerMarkdownRenderPlugin({
@@ -372,10 +382,21 @@ viewer.registerMarkdownRenderPlugin({
 })
 ```
 
+默认富渲染已启用：经过清洗的 HTML（含 `<br>`、HTML 表格）、GFM 表格、任务列表、
+脚注和 KaTeX。想换样式时，复制 `plugins/ocean-reading-theme.js` 并只修改其中
+作用于 `.md-preview` 的 CSS，然后在右侧点击“加载渲染插件”选择该文件。插件是会在
+页面中执行的 JavaScript，只加载自己信任的文件；沿用 `mineru-reading-theme` 名称会
+替换内置主题，而不是叠加两份主题。
+
+要覆盖保存本地 `full.md`，必须通过“选择结果文件夹”打开目录并授予读写权限。
+旧式文件夹上传和 ZIP 模式只能导出修改版 ZIP，不能原位覆盖。浏览器目录写入功能
+要求 Chromium 系浏览器的安全上下文（`localhost` 或 HTTPS）。
+
 ### 图片修改规则
 
 - **替换图片**：新旧图片格式必须一致，图片内容覆盖到 ZIP 中的原始路径，因此 Markdown 和 JSON 路径无需改变。
-- **从 Markdown 删除**：只删除 Markdown 图片引用，原图片和 JSON 保留用于审核追溯，并在 `review_edits.json` 中记录操作。
+- **删除链接**：只删除 Markdown 图片引用，原图片和 JSON 保留用于审核追溯。
+- **删除链接和图片**：删除引用并从工作副本移除图片；文件夹模式下点击“覆盖保存 Markdown”时才永久删除本地图片。
 - 工具不会覆盖原始 ZIP，导出文件名为 `原文件名-edited.zip`。
 
 ### 本地开发

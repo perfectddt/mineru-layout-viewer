@@ -10,6 +10,7 @@ const {
   parseMarkdownSections,
   matchMarkdownToPdf,
   MarkdownPreviewRenderer,
+  createRichMarkdownPlugin,
 } = await import('../dist/index.mjs')
 
 test('content_list images keep paths and normalize 0..1000 bbox values', () => {
@@ -89,4 +90,27 @@ test('Markdown preview plugins can configure rendering and provide scoped styles
 
   assert.match(renderer.render('first\nsecond'), /first<br>\nsecond/)
   assert.match(renderer.styles(), /rebeccapurple/)
+})
+
+test('rich Markdown plugin renders HTML breaks, tables, tasks, footnotes and TeX', () => {
+  const renderer = new MarkdownPreviewRenderer([createRichMarkdownPlugin()])
+  const html = renderer.render(`first<br>second
+
+| A | B |
+| - | - |
+| 1 | 2 |
+
+- [x] done
+
+$E=mc^2$
+
+note[^1]
+
+[^1]: footnote`)
+
+  assert.match(html, /first<br>second/)
+  assert.match(html, /<table/)
+  assert.match(html, /task-list-item/)
+  assert.match(html, /<math/)
+  assert.match(html, /footnotes/)
 })

@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
 
 type MarkdownItInstance = ReturnType<typeof MarkdownIt>
 
@@ -30,7 +31,14 @@ export class MarkdownPreviewRenderer {
       token.attrSet('data-md-start-line', String(token.map[0]))
       token.attrSet('data-md-end-line', String(token.map[1]))
     }
-    return this.renderer.renderer.render(tokens, this.renderer.options, environment)
+    const html = this.renderer.renderer.render(tokens, this.renderer.options, environment)
+    const purifier = DOMPurify as unknown as { sanitize?: (value: string, options: Record<string, unknown>) => string }
+    if (!purifier.sanitize) return html
+    return purifier.sanitize(html, {
+      USE_PROFILES: { html: true, mathMl: true, svg: true },
+      ADD_TAGS: ['eq', 'eqn'],
+      ADD_ATTR: ['data-md-start-line', 'data-md-end-line', 'data-idx'],
+    })
   }
 
   styles(): string {

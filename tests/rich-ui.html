@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="../dist/mineru-layout-viewer.iife.js"></script>
+<style>html,body,mineru-layout-viewer{height:100%;margin:0;display:block}</style>
+<mineru-layout-viewer id="viewer"></mineru-layout-viewer>
+<input id="folderFixture" type="file" webkitdirectory multiple hidden>
+<script type="module">
+  let markdown = `# 富 Markdown 验收
+
+第一行<br>第二行
+
+| 项目 | 状态 |
+| --- | --- |
+| 表格 | 正常 |
+
+<table><tr><th>HTML 表格</th><th>值</th></tr><tr><td>安全渲染</td><td>正常</td></tr></table>
+
+- [x] 任务列表
+
+公式：$E=mc^2$
+
+脚注[^1]
+
+[^1]: 脚注内容
+
+![缺失图片](images/not-found.png)
+
+正则测试 ABC-123 与 abc-456。
+`
+  if (new URLSearchParams(location.search).has('large')) {
+    markdown += Array.from({ length: 2100 }, (_, index) => `\n## 第 ${index + 1} 节\n这是一段用于大型文档性能验收的 Markdown 内容。`).join('\n')
+  }
+  await viewer.loadLayoutFromJson(JSON.stringify([
+    { type:'text', text:'富 Markdown 验收', page_idx:0, bbox:[100,100,900,180] },
+    { type:'image', img_path:'images/not-found.png', page_idx:0, bbox:[100,200,900,700] }
+  ]))
+  await viewer.loadMarkdown(markdown)
+  folderFixture.addEventListener('change', () => viewer.loadDirectory(folderFixture.files))
+</script>

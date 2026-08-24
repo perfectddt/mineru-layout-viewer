@@ -3,6 +3,7 @@ import { parseBlocks, normalizeAssetPath } from './parse-blocks.js'
 import { matchMarkdownToPdf, matchSectionsToPdf, normalize, lcsSimilarity } from './match-markdown.js'
 import { parseMarkdownSections } from './parse-markdown.js'
 import { MarkdownPreviewRenderer, type MarkdownRenderPlugin } from './markdown-preview.js'
+import { createElegantReadingTheme, createRichMarkdownPlugin } from './rich-markdown-plugin.js'
 import {
   MarkdownSourceEditor,
   createVimEditorPlugin,
@@ -23,15 +24,27 @@ interface PdfPageState {
 }
 
 interface ReviewEdit {
-  type: 'replace-image' | 'remove-image-reference' | 'image-to-text' | 'edit-markdown' | 'replace-text'
+  type: 'replace-image' | 'remove-image-reference' | 'remove-image-and-reference' | 'image-to-text' | 'edit-markdown' | 'replace-text'
   imagePath?: string
   detail?: string
   timestamp: string
+  page?: number
+  blockId?: string
+  markdownStart?: number
 }
 
 type UndoAction =
   | { type: 'restore-markdown'; markdown: string }
   | { type: 'restore-image'; zipPath: string; data: Uint8Array }
+  | { type: 'restore-markdown-and-image'; markdown: string; zipPath: string; data: Uint8Array }
+
+interface SearchResult {
+  start: number
+  end: number
+  sectionIndex: number
+  snippet: string
+  match: string
+}
 
 const STYLES = `
 :host { position:relative; display:flex; flex-direction:column; height:100%; font-family:system-ui,sans-serif; color:#1f2937; background:#fff; }
@@ -41,6 +54,7 @@ const STYLES = `
 .toolbar .ok { color:#16a34a; }
 .toolbar .warn { color:#d97706; }
 .toolbar .dirty { color:#b45309; font-weight:600; }
+.history-toggle { color:#b45309; border-color:#f59e0b; font-weight:600; }
 .toolbar-group { display:flex; align-items:center; gap:4px; padding-left:7px; border-left:1px solid #e5e7eb; }
 .toolbar-label { color:#6b7280; }
 .zoom-value { min-width:42px; text-align:center; color:#374151; }
@@ -54,6 +68,11 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .pane-toolbar { min-height:42px; display:flex; align-items:center; gap:5px; padding:6px 9px; border-bottom:1px solid #e5e7eb; flex-shrink:0; font-size:12px; color:#6b7280; background:#fff; }
 .pane-toolbar .spacer { flex:1; }
 .pane-toolbar button.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
+.history-panel { display:none; max-height:245px; overflow:auto; border-bottom:1px solid #e5e7eb; background:#fffbeb; flex-shrink:0; }
+.history-panel.open { display:block; }
+.history-empty { padding:12px; color:#92400e; font-size:12px; }
+.history-item { display:block; width:100%; text-align:left; border:0; border-bottom:1px solid #fde68a; border-radius:0; padding:8px 10px; background:transparent; }
+.history-item small { display:block; margin-top:2px; color:#78716c; }
 .pane { flex:1; min-height:0; overflow:auto; padding:10px; }
 .pane-left { background:#f8fafc; }
 .pane-right { display:flex; flex-direction:column; background:#fff; --md-zoom:1; --md-image-width:100%; --md-image-height:520px; }
@@ -76,12 +95,16 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .find-bar { display:none; padding:8px 10px; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex-shrink:0; }
 .find-bar.open { display:block; }
 .find-controls { display:flex; align-items:center; gap:6px; }
+.find-options { display:flex; align-items:center; gap:12px; margin-top:7px; font-size:11px; color:#4b5563; }
+.find-options label { display:flex; align-items:center; gap:4px; }
+.find-options input { min-width:0; flex:none; width:auto; }
 .find-bar input { min-width:120px; flex:1; max-width:280px; border:1px solid #d1d5db; border-radius:5px; padding:6px 8px; font:12px system-ui,sans-serif; }
 .find-result { min-width:80px; font-size:11px; color:#6b7280; }
 .find-results { max-height:190px; overflow:auto; margin-top:7px; border-top:1px solid #e5e7eb; }
 .find-result-item { display:block; width:100%; text-align:left; border:0; border-bottom:1px solid #e5e7eb; border-radius:0; padding:6px 8px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .find-result-item.active { color:#b91c1c; background:#fef2f2; }
 .search-hit { color:#b91c1c; background:#fee2e2; border-radius:2px; padding:0 1px; }
+.plugin-input { display:none; }
 .legend { display:flex; align-items:center; gap:8px; font-size:10px; color:#6b7280; }
 .legend i { display:inline-block; width:12px; height:8px; margin-right:3px; vertical-align:middle; border:1px solid #2563eb; }
 .legend .visual { border:2px solid #f59e0b; }
@@ -116,10 +139,11 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .empty { display:flex; align-items:center; justify-content:center; height:100%; color:#9ca3af; text-align:center; padding:30px; }
 @media (prefers-color-scheme:dark) {
   :host { color:#e5e7eb; background:#111827; }
-  .toolbar,.toolbar-group,.find-bar,.find-results,.find-result-item,.pane-toolbar,.left-column,.pane-left { border-color:#374151; }
+  .toolbar,.toolbar-group,.find-bar,.find-results,.find-result-item,.pane-toolbar,.left-column,.pane-left,.history-panel { border-color:#374151; }
   .pane-left { background:#111827; }
   .pane-right,.pdf-page,button,.find-bar { background:#1f2937; color:#e5e7eb; }
   .pane-toolbar,.md-preview,.inline-editor,.inline-editor textarea { background:#1f2937; color:#e5e7eb; }
+  .history-panel,.history-item { background:#29251b; color:#fef3c7; }
   .md-preview h1,.md-preview h2,.md-preview h3,.md-preview h4 { color:#f8fafc; border-color:#374151; }
   .md-preview blockquote,.md-preview th,.md-preview code { background:#111827; }
 }
@@ -153,14 +177,16 @@ export class MineruLayoutViewer extends HTMLElement {
   private findCursor = 0
   private currentFindStart = -1
   private resizeTimer: ReturnType<typeof setTimeout> | null = null
-  private previewRenderer = new MarkdownPreviewRenderer()
-  private markdownRenderPlugins: MarkdownRenderPlugin[] = []
+  private markdownRenderPlugins: MarkdownRenderPlugin[] = [createRichMarkdownPlugin(), createElegantReadingTheme()]
+  private previewRenderer = new MarkdownPreviewRenderer(this.markdownRenderPlugins)
   private markdownEditorPlugins: MarkdownEditorPlugin[] = []
   private sourceEditor: MarkdownSourceEditor | null = null
   private markdownMode: 'preview' | 'source' = 'preview'
   private sourceDraft = ''
   private vimEnabled = true
-  private searchResults: Array<{ start: number; end: number; sectionIndex: number; snippet: string }> = []
+  private searchResults: SearchResult[] = []
+  private sourceDirectoryHandle: FileSystemDirectoryHandle | null = null
+  private pendingDeletedAssets = new Set<string>()
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
@@ -232,6 +258,25 @@ export class MineruLayoutViewer extends HTMLElement {
     }
   }
 
+  /** Load a JavaScript render/theme plugin exported as default or markdownRenderPlugin. */
+  async loadMarkdownRenderPlugin(file: File) {
+    if (!/\.m?js$/i.test(file.name)) throw new Error('渲染插件必须是 .js 或 .mjs 文件')
+    if (!confirm(`加载插件会执行其中的 JavaScript。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
+    const url = URL.createObjectURL(file)
+    try {
+      const module = await import(/* @vite-ignore */ url) as {
+        default?: MarkdownRenderPlugin
+        markdownRenderPlugin?: MarkdownRenderPlugin
+      }
+      const plugin = module.default || module.markdownRenderPlugin
+      if (!plugin || typeof plugin.name !== 'string') throw new Error('插件需要导出带 name 的 MarkdownRenderPlugin 对象')
+      this.registerMarkdownRenderPlugin(plugin)
+      alert(`已加载渲染插件：${plugin.name}`)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
+
   /** Load one MinerU result ZIP and keep it in memory for review edits. */
   async loadZip(zipBlob: Blob) {
     this.resetReviewState()
@@ -259,6 +304,41 @@ export class MineruLayoutViewer extends HTMLElement {
     const directPdf = selected.find(file => /_origin\.pdf$/i.test(file.name))
       || selected.find(file => /\.pdf$/i.test(file.name))
     await this.loadArchiveEntries(directPdf)
+  }
+
+  /** Open a directory with read/write permission so full.md and deleted assets can be saved in place. */
+  async loadDirectoryHandle(handle: FileSystemDirectoryHandle) {
+    this.resetReviewState()
+    this.setStatus('正在读取可写文件夹…')
+    this.zip = new JSZip()
+    const collected: Array<{ path: string; file: File }> = []
+    await this.collectDirectoryFiles(handle, handle.name, collected)
+    if (!collected.length) throw new Error('所选文件夹为空')
+    for (let index = 0; index < collected.length; index++) {
+      const item = collected[index]
+      this.zip.file(item.path, item.file)
+      if (index % 50 === 0) this.setStatus(`正在读取可写文件夹… ${index + 1}/${collected.length}`)
+    }
+    this.sourceDirectoryHandle = handle
+    this.sourceZipName = `${handle.name || 'mineru-result'}.zip`
+    const directPdf = collected.find(item => /_origin\.pdf$/i.test(item.file.name))?.file
+      || collected.find(item => /\.pdf$/i.test(item.file.name))?.file
+    await this.loadArchiveEntries(directPdf)
+  }
+
+  private async collectDirectoryFiles(
+    directory: FileSystemDirectoryHandle,
+    prefix: string,
+    output: Array<{ path: string; file: File }>,
+  ) {
+    for await (const child of (directory as unknown as { values(): AsyncIterable<FileSystemHandle> }).values()) {
+      const path = `${prefix}/${child.name}`
+      if (child.kind === 'file') {
+        output.push({ path, file: await (child as FileSystemFileHandle).getFile() })
+      } else {
+        await this.collectDirectoryFiles(child as FileSystemDirectoryHandle, path, output)
+      }
+    }
   }
 
   private async loadArchiveEntries(directPdf?: File) {
@@ -325,7 +405,8 @@ export class MineruLayoutViewer extends HTMLElement {
         markdown: this.markdownPath,
         exportedAt: new Date().toISOString(),
         semantics: {
-          removedImages: 'Markdown reference removed; original ZIP asset and JSON retained',
+          removedImageReferences: 'Markdown reference removed; original asset and JSON retained',
+          removedImages: 'For remove-image-and-reference edits, the image asset is removed and JSON is retained',
           replacedImages: 'Asset bytes replaced at the original path',
         },
         edits: this.reviewEdits,
@@ -368,9 +449,17 @@ export class MineruLayoutViewer extends HTMLElement {
       this.markdownText = action.markdown
       this.refreshSectionsPreservingMatches(previousSections)
       this.rebuildMarkdownView()
-    } else if (this.zip) {
+    } else if (action.type === 'restore-image' && this.zip) {
       this.zip.file(action.zipPath, action.data)
       this.revokeAssetUrl(action.zipPath)
+      this.rebuildMarkdownView()
+    } else if (action.type === 'restore-markdown-and-image' && this.zip) {
+      const previousSections = this.sections
+      this.zip.file(action.zipPath, action.data)
+      this.pendingDeletedAssets.delete(action.zipPath)
+      this.revokeAssetUrl(action.zipPath)
+      this.markdownText = action.markdown
+      this.refreshSectionsPreservingMatches(previousSections)
       this.rebuildMarkdownView()
     }
     this.updateToolbar()
@@ -381,7 +470,6 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>${STYLES}</style><style id="markdownPluginStyles"></style>
       <div class="toolbar">
         <span id="stat">加载 MinerU ZIP 以开始</span>
-        <span id="dirty"></span>
         <span class="spacer"></span>
         <button id="undo" disabled>撤销</button>
         <button id="export" disabled>导出修改版 ZIP</button>
@@ -390,6 +478,7 @@ export class MineruLayoutViewer extends HTMLElement {
         <section class="pane-column left-column">
           <div class="pane-toolbar">
             <strong>PDF</strong>
+            <button id="dirty" class="history-toggle" title="查看并跳转到修改历史">暂无修改</button>
             <div class="toolbar-group">
               <button id="pdfZoomOut" title="缩小 PDF">−</button>
               <span id="pdfZoomValue" class="zoom-value">适合宽度</span>
@@ -400,6 +489,7 @@ export class MineruLayoutViewer extends HTMLElement {
             <span class="spacer"></span>
             <div class="legend"><span><i></i>文字</span><span><i class="visual"></i>图片</span><span><i class="removed"></i>已删/未引用</span></div>
           </div>
+          <div id="historyPanel" class="history-panel"></div>
           <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
         </section>
         <section class="pane-column right-column" id="rightColumn">
@@ -414,8 +504,11 @@ export class MineruLayoutViewer extends HTMLElement {
             </div>
             <button id="vimToggle" title="源码模式使用 Vim 键位">Vim：开</button>
             <button id="toggleFind">查找替换</button>
+            <button id="loadTheme" title="加载本地 JavaScript 渲染/主题插件">加载渲染插件</button>
+            <input id="themeFile" class="plugin-input" type="file" accept=".js,.mjs">
             <span class="spacer"></span>
             <span id="sourceStatus" class="source-status"></span>
+            <button id="saveLocalMarkdown" disabled title="仅使用目录读写方式打开时可用">覆盖保存 Markdown</button>
             <button id="sourceSave" hidden>保存并预览</button>
             <button id="sourceCancel" hidden>取消</button>
           </div>
@@ -428,6 +521,11 @@ export class MineruLayoutViewer extends HTMLElement {
               <button id="replaceAll">全部替换</button>
               <span id="findResult" class="find-result"></span>
               <button id="closeFind" title="关闭">×</button>
+            </div>
+            <div class="find-options">
+              <label><input id="findRegex" type="checkbox">正则</label>
+              <label><input id="findCase" type="checkbox">区分大小写</label>
+              <button id="removeBrokenImages" class="danger">删除失效图片链接</button>
             </div>
             <div id="findResults" class="find-results"></div>
           </div>
@@ -442,6 +540,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('export')!.addEventListener('click', () => {
       void this.exportEditedZip()
     })
+    this.shadowRoot.getElementById('dirty')!.addEventListener('click', () => this.toggleHistoryPanel())
     this.shadowRoot.getElementById('pdfZoomOut')!.addEventListener('click', () => this.changePdfZoom(-0.1))
     this.shadowRoot.getElementById('pdfZoomIn')!.addEventListener('click', () => this.changePdfZoom(0.1))
     this.shadowRoot.getElementById('fitPage')!.addEventListener('click', () => this.setPdfFitMode('page'))
@@ -458,8 +557,21 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('findNext')!.addEventListener('click', () => this.findNext())
     this.shadowRoot.getElementById('replaceOne')!.addEventListener('click', () => this.replaceCurrentMatch())
     this.shadowRoot.getElementById('replaceAll')!.addEventListener('click', () => this.replaceAllMatches())
+    this.shadowRoot.getElementById('removeBrokenImages')!.addEventListener('click', () => this.removeBrokenImageReferences())
+    this.shadowRoot.getElementById('saveLocalMarkdown')!.addEventListener('click', () => {
+      void this.saveMarkdownToFolder()
+    })
+    const themeFile = this.shadowRoot.getElementById('themeFile') as HTMLInputElement
+    this.shadowRoot.getElementById('loadTheme')!.addEventListener('click', () => themeFile.click())
+    themeFile.addEventListener('change', () => {
+      const file = themeFile.files?.[0]
+      if (file) void this.loadMarkdownRenderPlugin(file)
+      themeFile.value = ''
+    })
     const findInput = this.shadowRoot.getElementById('findText') as HTMLInputElement
     findInput.addEventListener('input', () => this.updateSearchResults())
+    this.shadowRoot.getElementById('findRegex')!.addEventListener('change', () => this.updateSearchResults())
+    this.shadowRoot.getElementById('findCase')!.addEventListener('change', () => this.updateSearchResults())
     findInput.addEventListener('keydown', event => {
       if (event.key === 'Enter') this.findNext()
     })
@@ -556,10 +668,17 @@ export class MineruLayoutViewer extends HTMLElement {
     shadow.getElementById('stat')!.innerHTML =
       `${this.pages.length} 页 · ${this.sections.length} 行 · ${images} 张图片 · <span class="${matched ? 'ok' : 'warn'}">匹配 ${matched}</span>`
     const dirty = shadow.getElementById('dirty')!
-    dirty.className = this.reviewEdits.length ? 'dirty' : ''
-    dirty.textContent = this.reviewEdits.length ? `已修改 ${this.reviewEdits.length} 项` : ''
+    dirty.className = `history-toggle${this.reviewEdits.length ? ' dirty' : ''}`
+    dirty.textContent = this.reviewEdits.length ? `已修改 ${this.reviewEdits.length} 项 ▾` : '暂无修改'
     ;(shadow.getElementById('undo') as HTMLButtonElement).disabled = this.undoStack.length === 0 || this.markdownMode === 'source'
     ;(shadow.getElementById('export') as HTMLButtonElement).disabled = !this.zip
+    ;(shadow.getElementById('saveLocalMarkdown') as HTMLButtonElement).disabled = !this.sourceDirectoryHandle
+    const brokenButton = shadow.getElementById('removeBrokenImages') as HTMLButtonElement | null
+    if (brokenButton) {
+      const count = this.brokenImageSections().length
+      brokenButton.textContent = `删除失效图片链接${count ? `（${count}）` : ''}`
+      brokenButton.disabled = count === 0
+    }
     const pdfZoomValue = shadow.getElementById('pdfZoomValue')
     if (pdfZoomValue) {
       pdfZoomValue.textContent = this.pdfFitMode === 'page'
@@ -568,6 +687,69 @@ export class MineruLayoutViewer extends HTMLElement {
     }
     const mdZoomValue = shadow.getElementById('mdZoomValue')
     if (mdZoomValue) mdZoomValue.textContent = `${Math.round(this.markdownZoom * 100)}%`
+    this.renderHistoryPanel()
+  }
+
+  private toggleHistoryPanel() {
+    const panel = this.shadowRoot?.getElementById('historyPanel')
+    if (!panel) return
+    panel.classList.toggle('open')
+    this.renderHistoryPanel()
+  }
+
+  private renderHistoryPanel() {
+    const panel = this.shadowRoot?.getElementById('historyPanel')
+    if (!panel) return
+    panel.innerHTML = ''
+    if (!this.reviewEdits.length) {
+      panel.innerHTML = '<div class="history-empty">还没有修改记录</div>'
+      return
+    }
+    const labels: Record<ReviewEdit['type'], string> = {
+      'replace-image': '替换图片',
+      'remove-image-reference': '删除图片链接',
+      'remove-image-and-reference': '删除链接和图片',
+      'image-to-text': '图片改为文字',
+      'edit-markdown': '编辑 Markdown',
+      'replace-text': '查找替换',
+    }
+    this.reviewEdits.slice().reverse().forEach((edit, reverseIndex) => {
+      const index = this.reviewEdits.length - 1 - reverseIndex
+      const button = document.createElement('button')
+      button.className = 'history-item'
+      const when = new Date(edit.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      button.innerHTML = `<strong>${index + 1}. ${labels[edit.type]}</strong><small>${edit.page ? `第 ${edit.page} 页 · ` : ''}${when}${edit.detail ? ` · ${this.escapeHtml(edit.detail)}` : ''}</small>`
+      button.addEventListener('click', () => this.goToReviewEdit(edit))
+      panel.appendChild(button)
+    })
+  }
+
+  private goToReviewEdit(edit: ReviewEdit) {
+    if (edit.page) {
+      const page = this.shadowRoot?.querySelector<HTMLElement>(`.pdf-page[data-page="${edit.page}"]`)
+      page?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      void this.renderPdfPage(edit.page, page || undefined)
+    }
+    if (edit.blockId) {
+      const overlay = this.shadowRoot?.querySelector<HTMLElement>(`.block-overlay[data-block-id="${CSS.escape(edit.blockId)}"]`)
+      overlay?.classList.add('active')
+    }
+    if (typeof edit.markdownStart === 'number') {
+      if (this.markdownMode === 'source' && this.sourceEditor) {
+        this.sourceEditor.goTo(edit.markdownStart)
+      } else {
+        const index = this.sections.findIndex(section => section.start <= edit.markdownStart! && section.end > edit.markdownStart!)
+        const element = this.shadowRoot?.querySelector<HTMLElement>(`[data-idx="${index}"]`)
+        element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        element?.classList.add('active')
+      }
+    }
+  }
+
+  private escapeHtml(value: string): string {
+    const element = document.createElement('span')
+    element.textContent = value
+    return element.innerHTML
   }
 
   private buildPdfOverlays() {
@@ -819,7 +1001,7 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!block) return
     event.preventDefault()
     event.stopPropagation()
-    this.openInlineBlockEditor(block)
+    this.openInlineBlockEditor(block, target.closest('img.md-asset') ? '' : undefined)
   }
 
   private openInlineBlockEditor(block: HTMLElement, replacementValue?: string) {
@@ -904,20 +1086,22 @@ export class MineruLayoutViewer extends HTMLElement {
         event.stopPropagation()
         this.chooseReplacement(section)
       })
-      const toText = document.createElement('button')
-      toText.textContent = '改为文字'
-      toText.addEventListener('click', event => {
-        event.stopPropagation()
-        this.openInlineBlockEditor(block, '')
-      })
       const remove = document.createElement('button')
       remove.className = 'danger'
-      remove.textContent = '从 Markdown 删除'
+      remove.textContent = '删除链接'
       remove.addEventListener('click', event => {
         event.stopPropagation()
         this.removeImageReference(section)
       })
-      actions.append(replace, toText, remove)
+      const removeBoth = document.createElement('button')
+      removeBoth.className = 'danger'
+      removeBoth.textContent = '删除链接和图片'
+      removeBoth.title = '立即从当前工作副本删除；打开文件夹时，点击“覆盖保存 Markdown”后才删除本地图片'
+      removeBoth.addEventListener('click', event => {
+        event.stopPropagation()
+        void this.removeImageAndReference(section)
+      })
+      actions.append(replace, remove, removeBoth)
       block.appendChild(actions)
     }
   }
@@ -1152,6 +1336,9 @@ export class MineruLayoutViewer extends HTMLElement {
       type: 'replace-image',
       imagePath: section.imagePath,
       timestamp: new Date().toISOString(),
+      page: section.page,
+      blockId: section.blockId,
+      markdownStart: section.start,
     })
     this.rebuildMarkdownView()
     this.updateToolbar()
@@ -1163,7 +1350,42 @@ export class MineruLayoutViewer extends HTMLElement {
       type: 'remove-image-reference',
       imagePath: section.imagePath,
       timestamp: new Date().toISOString(),
+      page: section.page,
+      blockId: section.blockId,
+      markdownStart: section.start,
     })
+  }
+
+  private async removeImageAndReference(section: MdSection) {
+    if (!this.zip || this.markdownText == null || !section.imagePath) return
+    const zipPath = this.resolveAssetPath(section.imagePath)
+    const entry = this.zip.file(zipPath)
+    if (!entry) {
+      if (confirm('本地图片本来就不存在。是否只删除 Markdown 图片链接？')) this.removeImageReference(section)
+      return
+    }
+    const localNotice = this.sourceDirectoryHandle
+      ? '\n\n本地图片会在点击“覆盖保存 Markdown”后删除。此前可撤销。'
+      : '\n\n图片会从导出的修改版 ZIP 中删除。'
+    if (!confirm(`确认删除图片链接及文件？\n${section.imagePath}${localNotice}`)) return
+    const previousMarkdown = this.markdownText
+    const previousSections = this.sections
+    const data = await entry.async('uint8array')
+    this.undoStack.push({ type: 'restore-markdown-and-image', markdown: previousMarkdown, zipPath, data })
+    this.zip.remove(zipPath)
+    this.pendingDeletedAssets.add(zipPath)
+    this.revokeAssetUrl(zipPath)
+    this.markdownText = previousMarkdown.slice(0, section.start) + previousMarkdown.slice(section.end)
+    this.reviewEdits.push({
+      type: 'remove-image-and-reference',
+      imagePath: section.imagePath,
+      timestamp: new Date().toISOString(),
+      page: section.page,
+      blockId: section.blockId,
+      markdownStart: section.start,
+    })
+    this.refreshSectionsPreservingMatches(previousSections)
+    this.rebuildMarkdownView()
   }
 
   private wrapEditorSelection(textarea: HTMLTextAreaElement, prefix: string, suffix: string) {
@@ -1186,6 +1408,11 @@ export class MineruLayoutViewer extends HTMLElement {
     if (this.markdownText == null) return
     const previousMarkdown = this.markdownText
     const previousSections = this.sections
+    const anchor = previousSections.find(section => section.start <= start && section.end > start)
+      || previousSections.find(section => section.start >= start)
+    edit.markdownStart ??= start
+    edit.page ??= anchor?.page
+    edit.blockId ??= anchor?.blockId
     this.undoStack.push({ type: 'restore-markdown', markdown: previousMarkdown })
     this.markdownText = previousMarkdown.slice(0, start) + replacement + previousMarkdown.slice(end)
     this.reviewEdits.push(edit)
@@ -1239,6 +1466,40 @@ export class MineruLayoutViewer extends HTMLElement {
     }
   }
 
+  private brokenImageSections(): MdSection[] {
+    if (!this.zip) return []
+    return this.sections.filter(section => {
+      if (section.kind !== 'image' || !section.imagePath) return false
+      if (/^(?:https?:|data:|blob:)/i.test(section.imagePath)) return false
+      return !this.zip!.file(this.resolveAssetPath(section.imagePath))
+    })
+  }
+
+  private removeBrokenImageReferences() {
+    if (this.markdownText == null) return
+    const broken = this.brokenImageSections()
+    if (!broken.length) {
+      this.setFindResult('没有失效图片链接')
+      return
+    }
+    const examples = broken.slice(0, 4).map(section => `• ${section.imagePath}`).join('\n')
+    if (!confirm(`发现 ${broken.length} 个本地文件不存在的图片链接，确认全部删除？\n\n${examples}${broken.length > 4 ? '\n…' : ''}`)) return
+    let next = this.markdownText
+    for (const section of [...broken].sort((a, b) => b.start - a.start)) {
+      next = next.slice(0, section.start) + next.slice(section.end)
+    }
+    const first = broken[0]
+    this.replaceMarkdownRange(0, this.markdownText.length, next, {
+      type: 'remove-image-reference',
+      detail: `批量删除 ${broken.length} 个失效图片链接`,
+      timestamp: new Date().toISOString(),
+      page: first.page,
+      blockId: first.blockId,
+      markdownStart: first.start,
+    })
+    this.setFindResult(`已删除 ${broken.length} 个失效图片链接`)
+  }
+
   private findNext() {
     if (!this.searchResults.length) this.updateSearchResults()
     if (!this.searchResults.length) return
@@ -1248,25 +1509,25 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private replaceCurrentMatch() {
-    const findInput = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
     const replaceInput = this.shadowRoot?.getElementById('replaceText') as HTMLInputElement | null
-    const query = findInput?.value || ''
-    if (!query) return this.setFindResult('请输入内容')
-    const currentDocument = this.currentMarkdownDocument()
-    if (this.currentFindStart < 0
-      || currentDocument.slice(this.currentFindStart, this.currentFindStart + query.length).toLocaleLowerCase() !== query.toLocaleLowerCase()) {
+    if (!this.buildSearchRegex(false)) return
+    let result = this.searchResults.find(item => item.start === this.currentFindStart)
+    if (!result) {
       this.findNext()
-      if (this.currentFindStart < 0) return
+      result = this.searchResults.find(item => item.start === this.currentFindStart)
+      if (!result) return
     }
-    const start = this.currentFindStart
-    const replacement = replaceInput?.value || ''
+    const start = result.start
+    const replacementPattern = replaceInput?.value || ''
+    const singleExpression = this.buildSearchRegex(false)!
+    const replacement = result.match.replace(singleExpression, replacementPattern)
     if (this.markdownMode === 'source' && this.sourceEditor) {
-      this.sourceEditor.view.dispatch({ changes: { from: start, to: start + query.length, insert: replacement } })
+      this.sourceEditor.view.dispatch({ changes: { from: start, to: result.end, insert: replacement } })
       this.sourceDraft = this.sourceEditor.getValue()
     } else {
-      this.replaceMarkdownRange(start, start + query.length, replacement, {
+      this.replaceMarkdownRange(start, result.end, replacement, {
         type: 'replace-text',
-        detail: `replace one: ${query}`,
+        detail: `替换：${result.match}`,
         timestamp: new Date().toISOString(),
       })
     }
@@ -1278,18 +1539,14 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private replaceAllMatches() {
     if (this.markdownText == null && !this.sourceEditor) return
-    const findInput = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
     const replaceInput = this.shadowRoot?.getElementById('replaceText') as HTMLInputElement | null
-    const query = findInput?.value || ''
-    if (!query) return this.setFindResult('请输入内容')
-    const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
-    let count = 0
+    const expression = this.buildSearchRegex(true)
+    if (!expression) return
     const replacement = replaceInput?.value || ''
     const currentDocument = this.currentMarkdownDocument()
-    const next = currentDocument.replace(expression, () => {
-      count++
-      return replacement
-    })
+    const count = Array.from(currentDocument.matchAll(expression)).length
+    expression.lastIndex = 0
+    const next = currentDocument.replace(expression, replacement)
     if (!count) return this.setFindResult('未找到')
     if (this.markdownMode === 'source' && this.sourceEditor) {
       this.sourceEditor.view.dispatch({ changes: { from: 0, to: currentDocument.length, insert: next } })
@@ -1297,7 +1554,7 @@ export class MineruLayoutViewer extends HTMLElement {
     } else {
       this.replaceMarkdownRange(0, currentDocument.length, next, {
         type: 'replace-text',
-        detail: `replace all ${count}: ${query}`,
+        detail: `正则/查找全部替换 ${count} 处`,
         timestamp: new Date().toISOString(),
       })
     }
@@ -1321,20 +1578,22 @@ export class MineruLayoutViewer extends HTMLElement {
     }
 
     const documentText = this.currentMarkdownDocument()
-    const source = documentText.toLocaleLowerCase()
-    const needle = query.toLocaleLowerCase()
-    let cursor = 0
-    while (cursor <= source.length - needle.length && this.searchResults.length < 1000) {
-      const start = source.indexOf(needle, cursor)
-      if (start < 0) break
-      const end = start + query.length
+    const expression = this.buildSearchRegex(true)
+    if (!expression) {
+      this.clearSearchHighlights()
+      return
+    }
+    let match: RegExpExecArray | null
+    while ((match = expression.exec(documentText)) && this.searchResults.length < 1000) {
+      const start = match.index
+      const end = start + match[0].length
       const sectionIndex = this.sections.findIndex(section => section.start <= start && section.end > start)
       const lineStart = documentText.lastIndexOf('\n', start - 1) + 1
       const nextLine = documentText.indexOf('\n', end)
       const lineEnd = nextLine < 0 ? documentText.length : nextLine
       const snippet = documentText.slice(lineStart, lineEnd).trim().replace(/\s+/g, ' ')
-      this.searchResults.push({ start, end, sectionIndex, snippet })
-      cursor = Math.max(end, start + 1)
+      this.searchResults.push({ start, end, sectionIndex, snippet, match: match[0] })
+      if (match[0].length === 0) expression.lastIndex++
     }
 
     this.searchResults.forEach((result, index) => {
@@ -1348,6 +1607,23 @@ export class MineruLayoutViewer extends HTMLElement {
     })
     this.setFindResult(`${this.searchResults.length} 处`)
     this.applySearchHighlights()
+  }
+
+  private buildSearchRegex(global: boolean): RegExp | null {
+    const query = (this.shadowRoot?.getElementById('findText') as HTMLInputElement | null)?.value || ''
+    if (!query) {
+      this.setFindResult('请输入内容')
+      return null
+    }
+    const regexMode = (this.shadowRoot?.getElementById('findRegex') as HTMLInputElement | null)?.checked
+    const caseSensitive = (this.shadowRoot?.getElementById('findCase') as HTMLInputElement | null)?.checked
+    const pattern = regexMode ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    try {
+      return new RegExp(pattern, `${global ? 'g' : ''}${caseSensitive ? '' : 'i'}u`)
+    } catch (error) {
+      this.setFindResult(`正则错误：${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
   }
 
   private goToSearchResult(index: number) {
@@ -1393,33 +1669,33 @@ export class MineruLayoutViewer extends HTMLElement {
     const input = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
     const query = input?.value || ''
     if (!query) return
-    const needle = query.toLocaleLowerCase()
+    const expression = this.buildSearchRegex(true)
+    if (!expression) return
     const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT)
     const nodes: Text[] = []
     let node: Node | null
     while ((node = walker.nextNode())) {
       const parent = node.parentElement
       if (!parent || parent.closest('button,textarea,mark,.preview-image-actions')) continue
-      if ((node.textContent || '').toLocaleLowerCase().includes(needle)) nodes.push(node as Text)
+      expression.lastIndex = 0
+      if (expression.test(node.textContent || '')) nodes.push(node as Text)
     }
     for (const textNode of nodes) {
       const text = textNode.data
-      const lower = text.toLocaleLowerCase()
       const fragment = document.createDocumentFragment()
       let cursor = 0
-      while (cursor < text.length) {
-        const match = lower.indexOf(needle, cursor)
-        if (match < 0) {
-          fragment.append(text.slice(cursor))
-          break
-        }
-        if (match > cursor) fragment.append(text.slice(cursor, match))
+      expression.lastIndex = 0
+      let match: RegExpExecArray | null
+      while ((match = expression.exec(text))) {
+        if (match.index > cursor) fragment.append(text.slice(cursor, match.index))
         const mark = document.createElement('mark')
         mark.className = 'search-hit'
-        mark.textContent = text.slice(match, match + query.length)
+        mark.textContent = match[0]
         fragment.append(mark)
-        cursor = match + query.length
+        cursor = match.index + match[0].length
+        if (match[0].length === 0) expression.lastIndex++
       }
+      if (cursor < text.length) fragment.append(text.slice(cursor))
       textNode.replaceWith(fragment)
     }
   }
@@ -1427,6 +1703,71 @@ export class MineruLayoutViewer extends HTMLElement {
   private setFindResult(message: string) {
     const result = this.shadowRoot?.getElementById('findResult')
     if (result) result.textContent = message
+  }
+
+  private async saveMarkdownToFolder() {
+    if (!this.sourceDirectoryHandle || this.markdownText == null || !this.markdownPath) return
+    if (this.markdownMode === 'source') this.saveSourceAndPreview()
+    const markdownRelativePath = this.relativeToSourceRoot(this.markdownPath)
+    const assetCount = this.pendingDeletedAssets.size
+    const message = `确认覆盖本地文件？\n\n${markdownRelativePath}`
+      + (assetCount ? `\n\n并永久删除 ${assetCount} 个本地图片文件。` : '')
+    if (!confirm(message)) return
+    const button = this.shadowRoot?.getElementById('saveLocalMarkdown') as HTMLButtonElement | null
+    if (button) {
+      button.disabled = true
+      button.textContent = '正在保存…'
+    }
+    try {
+      await this.writeLocalFile(markdownRelativePath, this.markdownText)
+      this.zip?.file(this.markdownPath, this.markdownText)
+      for (const zipPath of this.pendingDeletedAssets) {
+        await this.removeLocalFile(this.relativeToSourceRoot(zipPath))
+      }
+      this.pendingDeletedAssets.clear()
+      this.setStatus(`已覆盖保存 ${markdownRelativePath}`)
+      if (button) button.textContent = '已保存到本地'
+    } catch (error) {
+      alert(`保存失败：${error instanceof Error ? error.message : String(error)}`)
+      if (button) button.textContent = '保存失败'
+    } finally {
+      setTimeout(() => {
+        if (!button) return
+        button.textContent = '覆盖保存 Markdown'
+        button.disabled = !this.sourceDirectoryHandle
+      }, 1400)
+    }
+  }
+
+  private relativeToSourceRoot(path: string): string {
+    const normalized = normalizeAssetPath(path).replace(/^\/+/, '')
+    const root = normalizeAssetPath(this.sourceDirectoryHandle?.name || '')
+    const relative = root && normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized
+    if (!relative || relative.split('/').includes('..')) throw new Error(`不安全的本地路径：${path}`)
+    return relative
+  }
+
+  private async localParent(path: string): Promise<{ parent: FileSystemDirectoryHandle; name: string }> {
+    if (!this.sourceDirectoryHandle) throw new Error('没有文件夹写入权限')
+    const parts = path.split('/').filter(Boolean)
+    const name = parts.pop()
+    if (!name) throw new Error(`无效路径：${path}`)
+    let parent = this.sourceDirectoryHandle
+    for (const part of parts) parent = await parent.getDirectoryHandle(part)
+    return { parent, name }
+  }
+
+  private async writeLocalFile(path: string, data: string) {
+    const { parent, name } = await this.localParent(path)
+    const handle = await parent.getFileHandle(name, { create: true })
+    const writable = await handle.createWritable()
+    await writable.write(data)
+    await writable.close()
+  }
+
+  private async removeLocalFile(path: string) {
+    const { parent, name } = await this.localParent(path)
+    await parent.removeEntry(name)
   }
 
   private pickMarkdownPath(names: string[]): string {
@@ -1513,6 +1854,8 @@ export class MineruLayoutViewer extends HTMLElement {
     this.sections = []
     this.undoStack = []
     this.reviewEdits = []
+    this.sourceDirectoryHandle = null
+    this.pendingDeletedAssets.clear()
   }
 
   private setStatus(message: string) {
