@@ -7,6 +7,7 @@
 export default {
   // Replace the built-in reading theme instead of stacking conflicting rules.
   name: 'mineru-reading-theme',
+  version: '2.0.0',
   styles: `
 .md-preview {
   --ef-bg:#fff9e8;
@@ -43,6 +44,23 @@ export default {
 .md-preview h4 { color:var(--ef-orange); }
 .md-preview h5 { color:var(--ef-blue); }
 .md-preview h6 { color:var(--ef-cyan); }
+.md-preview .heading-level-badge {
+  display:inline-block;
+  width:2.25em;
+  margin-right:.35em;
+  color:inherit;
+  font:inherit;
+  font-size:1em;
+  font-weight:inherit;
+  letter-spacing:0;
+  opacity:.82;
+}
+.md-preview h1 { margin-left:0; }
+.md-preview h2 { margin-left:.7em; }
+.md-preview h3 { margin-left:1.4em; }
+.md-preview h4 { margin-left:2.1em; }
+.md-preview h5 { margin-left:2.8em; }
+.md-preview h6 { margin-left:3.5em; }
 .md-preview a { color:var(--ef-blue); font-weight:600; text-decoration-thickness:1px; text-underline-offset:3px; }
 .md-preview strong { color:var(--ef-green); }
 .md-preview em { color:var(--ef-purple); }
@@ -102,8 +120,15 @@ export default {
 }
 `,
   afterRender(root) {
-    if (!root.classList.contains('org-preview')) return
     for (const heading of root.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+      if (!heading.querySelector(':scope > .heading-level-badge')) {
+        const badge = document.createElement('span')
+        badge.className = 'heading-level-badge'
+        badge.textContent = heading.tagName
+        badge.setAttribute('aria-hidden', 'true')
+        heading.prepend(badge)
+      }
+      if (!root.classList.contains('org-preview')) continue
       const text = heading.textContent || ''
       if (/\bTODO\b/.test(text)) heading.classList.add('org-todo')
       if (/\bDONE\b/.test(text)) heading.classList.add('org-done')

@@ -160,6 +160,7 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .pane-body.outline-open .outline-resizer { display:block; }
 .pane-body.outline-stack .outline-resizer { width:auto; height:6px; cursor:row-resize; background:linear-gradient(transparent 2px,#cbd5e1 2px,#cbd5e1 3px,transparent 3px); }
 .outline-item { display:block; width:100%; text-align:left; border:0; border-radius:0; padding:5px 9px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.outline-level { display:inline-block; width:2.35em; margin-right:5px; color:#64748b; font:600 10px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; vertical-align:1px; }
 .outline-empty { padding:10px; color:#9ca3af; font-size:12px; }
 .pane { flex:1; min-width:0; min-height:0; overflow:auto; padding:10px; }
 .pane-left { background:#f8fafc; }
@@ -1371,7 +1372,10 @@ export class MineruLayoutViewer extends HTMLElement {
       const button = document.createElement('button')
       button.className = 'outline-item'
       button.style.paddingLeft = `${8 + (heading.level - 1) * 14}px`
-      button.textContent = heading.title
+      const level = document.createElement('span')
+      level.className = 'outline-level'
+      level.textContent = `H${heading.level}`
+      button.append(level, document.createTextNode(heading.title))
       button.title = heading.title
       button.addEventListener('click', () => {
         if (this.markdownMode === 'source' && this.sourceEditor) {
@@ -1396,7 +1400,10 @@ export class MineruLayoutViewer extends HTMLElement {
           const button = document.createElement('button')
           button.className = 'outline-item'
           button.style.paddingLeft = `${8 + level * 14}px`
-          button.textContent = item.title || '未命名书签'
+          const badge = document.createElement('span')
+          badge.className = 'outline-level'
+          badge.textContent = `H${Math.min(level + 1, 6)}`
+          button.append(badge, document.createTextNode(item.title || '未命名书签'))
           button.addEventListener('click', () => void this.goToPdfDestination(item.dest))
           panel.appendChild(button)
           if (item.items?.length) append(item.items, level + 1)
@@ -1417,7 +1424,10 @@ export class MineruLayoutViewer extends HTMLElement {
       const button = document.createElement('button')
       button.className = 'outline-item'
       button.style.paddingLeft = `${8 + (item.level - 1) * 14}px`
-      button.textContent = `${item.title} · p${item.section.page}`
+      const level = document.createElement('span')
+      level.className = 'outline-level'
+      level.textContent = `H${item.level}`
+      button.append(level, document.createTextNode(`${item.title} · p${item.section.page}`))
       button.addEventListener('click', () => this.goToPdfPage(item.section.page))
       panel.appendChild(button)
     }
