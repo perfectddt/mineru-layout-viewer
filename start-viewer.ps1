@@ -10,7 +10,6 @@ function Test-ViewerServer {
   try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri $viewerUrl -TimeoutSec 1
     return $response.StatusCode -eq 200 `
-      -and $response.Content -match '<title>mineru-layout-viewer 测试</title>' `
       -and $response.Content -match '<mineru-layout-viewer'
   } catch {
     return $false
@@ -30,7 +29,7 @@ if (-not (Test-ViewerServer)) {
   if (-not $python) {
     Add-Type -AssemblyName PresentationFramework
     [System.Windows.MessageBox]::Show(
-      "没有找到 Python。请先安装 Python，或者在项目目录运行其他静态服务器。",
+      'Python was not found. Install Python or run another static server in the project directory.',
       'MinerU Layout Viewer'
     ) | Out-Null
     exit 1
@@ -50,7 +49,7 @@ if (-not (Test-ViewerServer)) {
 if (-not (Test-ViewerServer)) {
   Add-Type -AssemblyName PresentationFramework
   [System.Windows.MessageBox]::Show(
-    "本地服务启动失败，请检查端口 $port 是否被其他程序占用。",
+    "The local server failed to start. Check whether port $port is already in use.",
     'MinerU Layout Viewer'
   ) | Out-Null
   exit 1
