@@ -19,6 +19,10 @@ body { height: 100vh; font-family: system-ui, sans-serif; }
 .drop-zone .hint h3 { font-size: 18px; color: #333; margin-bottom: 8px; }
 .drop-zone .hint p { font-size: 13px; margin: 2px 0; }
 .drop-zone .hint a { color: #3b82f6; }
+.choices { display:flex; gap:10px; justify-content:center; margin:18px 0 10px; }
+.choices button { border:1px solid #3b82f6; border-radius:7px; padding:8px 14px; background:#fff; color:#2563eb; cursor:pointer; }
+.choices button.primary { background:#2563eb; color:#fff; }
+.load-status { min-height:20px; margin-top:10px; color:#2563eb; font-size:12px; }
 .hidden { display: none !important; }
 </style>
 </head>
@@ -27,8 +31,13 @@ body { height: 100vh; font-family: system-ui, sans-serif; }
 <div id="dropZone" class="drop-zone">
   <div class="hint">
     <h3>MinerU 图片审核编辑器</h3>
-    <p>拖放或点击选择 MinerU 导出 .zip</p>
+    <p>拖放 MinerU 导出 ZIP，或直接选择 MinerU 结果文件夹</p>
     <p>支持图片定位、替换、软删除、撤销和导出修改版 ZIP</p>
+    <div class="choices">
+      <button id="chooseZip" class="primary" type="button">选择 ZIP</button>
+      <button id="chooseFolder" type="button">选择结果文件夹</button>
+    </div>
+    <p id="loadStatus" class="load-status"></p>
     <p style="font-size:11px;margin-top:12px">
       <a href="https://www.npmjs.com/package/mineru-layout-viewer" target="_blank">npm</a>
       &nbsp;·&nbsp;
@@ -46,12 +55,29 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 
 const dropZone = document.getElementById('dropZone')
 const viewer = document.getElementById('viewer')
+const loadStatus = document.getElementById('loadStatus')
+
+document.getElementById('chooseZip').addEventListener('click', e => {
+  e.stopPropagation()
+  const input = document.createElement('input')
+  input.type = 'file'; input.accept = '.zip'
+  input.onchange = () => handleFiles([...input.files])
+  input.click()
+})
+
+document.getElementById('chooseFolder').addEventListener('click', e => {
+  e.stopPropagation()
+  const input = document.createElement('input')
+  input.type = 'file'; input.webkitdirectory = true; input.multiple = true
+  input.onchange = () => handleDirectory(input.files)
+  input.click()
+})
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over') })
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'))
 dropZone.addEventListener('click', () => {
   const input = document.createElement('input')
-  input.type = 'file'; input.accept = '.zip,.pdf,.json'; input.multiple = true
+  input.type = 'file'; input.accept = '.zip'
   input.onchange = () => handleFiles([...input.files])
   input.click()
 })
@@ -65,6 +91,7 @@ async function handleFiles(files) {
   try {
     const zip = files.find(f => f.name.toLowerCase().endsWith('.zip'))
     if (zip) {
+      loadStatus.textContent = `正在打开 ${zip.name}（大文件请留意上方加载进度）`
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
       await viewer.loadZip(zip)
       return
@@ -81,6 +108,18 @@ async function handleFiles(files) {
       return
     }
     throw new Error('请选择 MinerU ZIP，或同时选择 PDF 与 JSON')
+  } catch (error) {
+    viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
+    alert(error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function handleDirectory(files) {
+  if (!files || !files.length) return
+  try {
+    loadStatus.textContent = `正在读取文件夹（${files.length} 个文件）`
+    dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+    await viewer.loadDirectory(files)
   } catch (error) {
     viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
     alert(error instanceof Error ? error.message : String(error))

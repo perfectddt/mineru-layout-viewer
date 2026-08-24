@@ -29,6 +29,8 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Nested block handling** — resolves list items, table cells, and other nested blocks to their leaf coordinates
 - **Framework-agnostic** — built as a Web Component, works with React, Vue, or plain HTML
 - **Zip support** — drop a MinerU output `.zip` directly, auto-extracts PDF + layout + markdown
+- **Folder support** — select an uncompressed MinerU result directory directly (no ZIP required)
+- **Large PDF support** — shows loading progress and renders PDF pages only near the viewport
 - **Image review cards** — render image assets from the ZIP and map them to PDF image blocks by path
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
 - **Replace / soft-delete / undo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
@@ -152,6 +154,7 @@ interface MdSection {
 | Method                                  | Description                           |
 |-----------------------------------------|---------------------------------------|
 | `loadZip(blob: Blob): Promise<void>`    | Load from a MinerU export .zip        |
+| `loadDirectory(files: FileList \| File[]): Promise<void>` | Load an uncompressed MinerU result folder |
 | `loadLayoutFromJson(data: object\|string)`| Load layout JSON directly           |
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
 | `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
@@ -331,6 +334,7 @@ interface MdSection {
 | 方法                                    | 说明                        |
 |-----------------------------------------|-----------------------------|
 | `loadZip(blob: Blob): Promise<void>`    | 从 Mineru 导出 .zip 加载    |
+| `loadDirectory(files: FileList \| File[]): Promise<void>` | 直接加载未压缩的 MinerU 结果文件夹 |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
 | `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
