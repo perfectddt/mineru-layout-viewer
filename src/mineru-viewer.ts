@@ -161,6 +161,10 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .pane-body.outline-stack .outline-resizer { width:auto; height:6px; cursor:row-resize; background:linear-gradient(transparent 2px,#cbd5e1 2px,#cbd5e1 3px,transparent 3px); }
 .outline-item { display:block; width:100%; text-align:left; border:0; border-radius:0; padding:5px 9px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .outline-level { display:inline-block; width:2.35em; margin-right:5px; color:#64748b; font:600 10px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; vertical-align:1px; }
+.outline-search { position:sticky; top:0; z-index:2; padding:6px 7px; background:#f8fafc; border-bottom:1px solid #e5e7eb; }
+.outline-search input { width:100%; height:28px; padding:3px 8px; border:1px solid #cbd5e1; border-radius:6px; color:#334155; background:#fff; font:12px/1.4 system-ui,sans-serif; outline:none; }
+.outline-search input:focus { border-color:#3b82f6; box-shadow:0 0 0 2px #3b82f622; }
+.outline-no-match { display:none; padding:10px; color:#9ca3af; font-size:12px; }
 .outline-empty { padding:10px; color:#9ca3af; font-size:12px; }
 .pane { flex:1; min-width:0; min-height:0; overflow:auto; padding:10px; }
 .pane-left { background:#f8fafc; }
@@ -1358,6 +1362,7 @@ export class MineruLayoutViewer extends HTMLElement {
     const panel = this.shadowRoot?.getElementById('mdOutlinePanel')
     if (!panel) return
     panel.innerHTML = ''
+    const list = this.createOutlineSearch(panel, `搜索 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} 大纲`)
     const headings = this.sections.flatMap((section, index) => {
       const match = this.documentFormat === 'org'
         ? section.raw.match(/^(\*{1,6})\s+(.+)$/)
@@ -1365,7 +1370,7 @@ export class MineruLayoutViewer extends HTMLElement {
       return match ? [{ section, index, level: match[1].length, title: match[2] }] : []
     })
     if (!headings.length) {
-      panel.innerHTML = `<div class="outline-empty">没有 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} 标题</div>`
+      list.innerHTML = `<div class="outline-empty">没有 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} 标题</div>`
       return
     }
     for (const heading of headings) {
@@ -1386,7 +1391,7 @@ export class MineruLayoutViewer extends HTMLElement {
         element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
         if (element) this.onMdClick(heading.section, heading.index, element)
       })
-      panel.appendChild(button)
+      list.appendChild(button)
     }
   }
 
@@ -1394,6 +1399,7 @@ export class MineruLayoutViewer extends HTMLElement {
     const panel = this.shadowRoot?.getElementById('pdfOutlinePanel')
     if (!panel) return
     panel.innerHTML = ''
+    const list = this.createOutlineSearch(panel, '搜索 PDF 书签')
     if (this.pdfOutline.length) {
       const append = (items: PdfOutlineItem[], level: number) => {
         for (const item of items) {
@@ -1405,7 +1411,7 @@ export class MineruLayoutViewer extends HTMLElement {
           badge.textContent = `H${Math.min(level + 1, 6)}`
           button.append(badge, document.createTextNode(item.title || '未命名书签'))
           button.addEventListener('click', () => void this.goToPdfDestination(item.dest))
-          panel.appendChild(button)
+          list.appendChild(button)
           if (item.items?.length) append(item.items, level + 1)
         }
       }
@@ -1417,7 +1423,7 @@ export class MineruLayoutViewer extends HTMLElement {
       return match && section.page ? [{ section, level: match[1].length, title: match[2] }] : []
     })
     if (!fallback.length) {
-      panel.innerHTML = '<div class="outline-empty">PDF 没有内置书签，也没有可用的 Markdown 标题</div>'
+      list.innerHTML = '<div class="outline-empty">PDF 没有内置书签，也没有可用的 Markdown 标题</div>'
       return
     }
     for (const item of fallback) {
@@ -1429,8 +1435,34 @@ export class MineruLayoutViewer extends HTMLElement {
       level.textContent = `H${item.level}`
       button.append(level, document.createTextNode(`${item.title} · p${item.section.page}`))
       button.addEventListener('click', () => this.goToPdfPage(item.section.page))
-      panel.appendChild(button)
+      list.appendChild(button)
     }
+  }
+
+  private createOutlineSearch(panel: HTMLElement, placeholder: string) {
+    const search = document.createElement('div')
+    search.className = 'outline-search'
+    const input = document.createElement('input')
+    input.type = 'search'
+    input.placeholder = placeholder
+    input.setAttribute('aria-label', placeholder)
+    search.appendChild(input)
+    const list = document.createElement('div')
+    const noMatch = document.createElement('div')
+    noMatch.className = 'outline-no-match'
+    noMatch.textContent = '没有匹配的标题'
+    input.addEventListener('input', () => {
+      const query = input.value.trim().toLocaleLowerCase()
+      let visible = 0
+      for (const item of list.querySelectorAll<HTMLElement>('.outline-item')) {
+        const matched = !query || (item.title || item.textContent || '').toLocaleLowerCase().includes(query)
+        item.style.display = matched ? '' : 'none'
+        if (matched) visible++
+      }
+      noMatch.style.display = query && !visible ? 'block' : 'none'
+    })
+    panel.append(search, list, noMatch)
+    return list
   }
 
   private async goToPdfDestination(destination: PdfOutlineItem['dest']) {

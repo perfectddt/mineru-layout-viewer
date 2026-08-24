@@ -438,7 +438,7 @@ viewer.registerMarkdownRenderPlugin({
 `plugins/phycat-prussian-theme.js`。原主题的交叉斜线背景、霞鹜文楷和 Cascadia Code 字体均已保留；字体文件放在
 `plugins/phycat/`。插件会依次尝试当前页面相对路径、上级路径和站点根路径，并在字体不可用时回退到系统楷体；修改插件后需在设置中重新选择该文件，以更新浏览器保存的插件源码。
 查看器会把插件中的 `@font-face` 单独同步到页面级样式，避免字体声明停留在 Shadow DOM 中而不触发浏览器下载。
-Phycat 与 Everforest 主题的 2.0 版本会在正文标题左侧显示同字号、同颜色的 `H1`–`H6` 层级标记，并按标题等级逐级缩进；PDF 书签和 Markdown/Org 大纲也显示相同的层级标记。
+原版 `phycat-prussian-theme.js` 与 `everforest-org-theme.js` 保持不变；新增的 `phycat-prussian-theme-v2.js` 与 `everforest-org-theme-v2.js` 会在正文标题左侧显示同字号、同颜色的 `H1`–`H6` 层级标记，并按标题等级逐级缩进。PDF 书签和 Markdown/Org 大纲也显示层级标记，并各自提供标题搜索框。
 
 单 Org 文件还可加载 `plugins/everforest-org-theme.js`。它根据提供的 Emacs
 `everforest-hard-light-theme.el` / `everforest-hard-dark-theme.el` 配色制作，包含 Org 标题层级、TODO/DONE、表格、代码块、任务列表和实时编辑状态样式。
