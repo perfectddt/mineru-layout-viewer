@@ -207,6 +207,12 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .md-preview table { width:100%; border-collapse:collapse; margin:.8em 0; }
 .md-preview th,.md-preview td { border:1px solid #cbd5e1; padding:6px 8px; }
 .md-preview th { background:#f1f5f9; }
+.md-preview .org-planning { display:flex; flex-wrap:wrap; gap:8px 14px; margin:.45em 0; color:#64748b; font-size:.9em; }
+.md-preview .org-planning strong { color:#9f1239; }
+.md-preview .org-properties { margin:.55em 0; padding:8px 12px; border-left:3px solid #94a3b8; background:#f8fafc; }
+.md-preview .org-property { display:grid; grid-template-columns:minmax(70px,max-content) 1fr; gap:10px; }
+.md-preview .org-property dt { color:#475569; font-family:ui-monospace,monospace; font-weight:700; }
+.md-preview .org-property dd { margin:0; overflow-wrap:anywhere; }
 .md-preview a { color:#2563eb; }
 .md-preview img.md-asset { display:block; max-width:var(--md-image-width); max-height:var(--md-image-height); margin:8px auto; object-fit:contain; }
 .md-preview [data-md-start-line] { border-radius:4px; transition:background .12s,box-shadow .12s; }

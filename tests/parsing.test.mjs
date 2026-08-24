@@ -134,9 +134,20 @@ test('Org conversion preserves source line mapping and renders common Org constr
 |------+------|
 | Org  | 正常 |
 
+CLOSED: [2024-01-20 Sat 13:23]
+:PROPERTIES:
+:ID:       GTD-flow-2024-01-20-13-13-42
+:END:
+
+\\| , g ~     \\| 设置 gtd       \\|                                                         \\|
+\\| , g o     \\|                \\| org-gtd-organize                                        \\|
+\\| , p       \\| 设置优先级      \\| org-priority                                            \\|
+
 #+BEGIN_SRC javascript
 console.log('ok')
 #+END_SRC
+
+: fixed width example
 `
   const markdown = orgToMarkdown(org)
   const renderer = new MarkdownPreviewRenderer([createRichMarkdownPlugin()])
@@ -152,6 +163,12 @@ console.log('ok')
   assert.equal(image?.imagePath, 'images/figure.png')
   const html = renderer.render(markdown)
   assert.match(html, /<table/)
+  assert.match(html, /class="org-planning"/)
+  assert.match(html, /<strong>CLOSED:<\/strong>/)
+  assert.match(html, /class="org-properties"/)
+  assert.match(html, /GTD-flow-2024-01-20-13-13-42/)
+  assert.match(html, /org-gtd-organize/)
+  assert.match(html, /fixed width example/)
   assert.match(html, /language-javascript/)
   assert.match(html, /<img[^>]+figure\.png/)
 })

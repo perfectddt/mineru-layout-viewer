@@ -48,6 +48,7 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Standalone Markdown editor** — CodeMirror/live-preview panes support side or stacked layout, draggable ratios, center-line swapping, and bidirectional navigation
 - **Typora-style hybrid editing** — focusing a rendered block reveals its real Markdown/Org markers with syntax styling while bold, italic, heading, and math semantics remain visible
 - **Standalone Org editor** — open `.org` files with the same preview/live/Code/Vim, outline, search/replace, history, zoom, layout, and local-save workflow
+- **Org metadata and code rendering** — source/example blocks, fixed-width lines, planning timestamps, property drawers, and Org tables with or without separator rows
 - **Large PDF support** — renders PDF pages only near the viewport
 - **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
@@ -275,6 +276,7 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 - **单 Markdown 编辑器** — `code` 模式的源码/渲染支持左右或上下排列、拖动比例、中线交换和双向定位
 - **Typora 式混合编辑** — 聚焦当前块时显示真实 Markdown/Org 标记并进行语法着色，同时保留粗体、斜体、标题和公式源码的语义样式
 - **单 Org 编辑器** — `.org` 文件同样支持预览/实时预览/Code/Vim、大纲、搜索替换、历史、缩放、布局和覆盖保存
+- **Org 元数据与代码渲染** — 支持源码/示例块、固定宽度代码行、计划时间戳、属性抽屉，以及有无分隔行的 Org 表格
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销/重做** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据

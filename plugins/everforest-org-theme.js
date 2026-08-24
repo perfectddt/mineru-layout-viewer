@@ -77,6 +77,11 @@ export default {
 .md-preview.org-preview { box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ef-green) 22%,transparent); }
 .md-preview.org-preview .org-todo { color:var(--ef-red); }
 .md-preview.org-preview .org-done { color:var(--ef-purple); text-decoration:line-through; }
+.md-preview.org-preview .org-planning { color:var(--ef-grey1); }
+.md-preview.org-preview .org-planning strong { color:var(--ef-red); }
+.md-preview.org-preview .org-properties { border-left-color:var(--ef-aqua); background:var(--ef-bg-hl); }
+.md-preview.org-preview .org-property dt { color:var(--ef-orange); }
+.md-preview.org-preview .org-property dd { color:var(--ef-fg); }
 .md-preview.org-preview .live-editable:focus { background:var(--ef-bg-hl); box-shadow:inset 3px 0 0 var(--ef-green); }
 @media (prefers-color-scheme:dark) {
   .md-preview {
