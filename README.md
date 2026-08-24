@@ -1,5 +1,10 @@
 # MinerU Layout Viewer
 
+On Windows, double-click `start-viewer.cmd` to start the local server from the
+project root and open the viewer automatically. Avoid opening `index.html`
+through `file://`, because browser security restrictions can prevent folder
+write-back, plugin fonts, dynamic resources, or PDF workers from loading.
+
 Visualize [MinerU](https://github.com/opendatalab/MinerU) `layout.json` / `middle.json` output — side-by-side PDF + Markdown with bidirectional click-to-navigate.
 
 [English](#english) | [中文](#chinese)
@@ -226,6 +231,11 @@ MIT
 
 <a name="chinese"></a>
 ## 中文
+
+Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会从项目根目录
+启动本地服务并自动打开浏览器，不需要手动输入网址。不要通过 `file://` 直接
+打开 `index.html`，否则浏览器安全限制可能导致文件夹写回、插件字体、动态资源
+或 PDF Worker 无法正常工作。
 
 ### 演示
 
