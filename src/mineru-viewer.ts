@@ -1,41 +1,67 @@
-import { parseBlocks } from './parse-blocks.js'
-import { matchMarkdownToPdf } from './match-markdown.js'
+import JSZip from 'jszip'
+import { parseBlocks, normalizeAssetPath } from './parse-blocks.js'
+import { matchMarkdownToPdf, normalize, lcsSimilarity } from './match-markdown.js'
 import type { PdfBlock, MdSection } from './parse-blocks.js'
-import { normalize, lcsSimilarity } from './match-markdown.js'
 
-// We load pdf.js worker from CDN — consumer can override via window.PDFJS_WORKER_SRC
 declare const pdfjsLib: typeof import('pdfjs-dist')
 
 const RENDER_SCALE = 2.0
 
-const STYLES = `
-:host { display: flex; flex-direction: column; height: 100%; font-family: system-ui, sans-serif; color-scheme: light dark; }
-.toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid #e5e5e5; font-size: 12px; color: #888; flex-shrink: 0; flex-wrap: wrap; }
-.toolbar .sep { color: #ddd; }
-.toolbar .ok { color: #16a34a; }
-.toolbar .warn { color: #f59e0b; }
-@media (prefers-color-scheme: dark) {
-  .toolbar { border-color: #333; }
-  .toolbar .sep { color: #555; }
+interface ReviewEdit {
+  type: 'replace-image' | 'remove-image-reference'
+  imagePath?: string
+  timestamp: string
 }
-.split { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; overflow: hidden; }
-.pane { overflow: auto; padding: 10px; }
-.pane-left { border-right: 1px solid #e5e5e5; background: #fff; }
-.pane-right { background: #fff; }
-.pdf-page { position: relative; margin: 0 auto 12px; border: 1px solid #e5e5e5; border-radius: 4px; overflow: hidden; }
-.pdf-page img { display: block; width: 100%; }
-.pdf-page .page-num { position: absolute; bottom: 2px; right: 4px; font-size: 9px; color: #999; background: rgba(255,255,255,.85); padding: 1px 4px; border-radius: 3px; }
-@media (prefers-color-scheme: dark) { .pdf-page { border-color: #333; } .pdf-page .page-num { background: rgba(0,0,0,.7); } }
-.block-overlay { position: absolute; border: 1px solid transparent; cursor: pointer; transition: all .15s; }
-.block-overlay:hover { border-color: #f59e0b; background: rgba(245,158,11,.12); }
-.block-overlay.active { border-color: #3b82f6 !important; background: rgba(59,130,246,.2) !important; z-index: 10; box-shadow: 0 0 0 1px #3b82f6; }
-.md-line { display: block; cursor: pointer; padding: 2px 8px; border-radius: 4px; border-left: 2px solid transparent; font-size: 13px; line-height: 1.5; font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
-.md-line.match { border-left-color: rgba(245,158,11,.4); }
-.md-line.match:hover { background: rgba(245,158,11,.08); }
-.md-line.no-match { color: #999; opacity: .6; }
-.md-line.active { background: rgba(59,130,246,.1); border-left-color: #3b82f6; box-shadow: inset 0 0 0 1px rgba(59,130,246,.3); }
-@media (prefers-color-scheme: dark) { .md-line.active { background: rgba(59,130,246,.15); } }
-.md-line .badge { font-size: 10px; color: #999; margin-left: 6px; }
+
+type UndoAction =
+  | { type: 'restore-markdown'; markdown: string }
+  | { type: 'restore-image'; zipPath: string; data: Uint8Array }
+
+const STYLES = `
+:host { display:flex; flex-direction:column; height:100%; font-family:system-ui,sans-serif; color:#1f2937; background:#fff; }
+* { box-sizing:border-box; }
+.toolbar { display:flex; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid #e5e7eb; font-size:12px; color:#6b7280; flex-shrink:0; flex-wrap:wrap; }
+.toolbar .spacer { flex:1; }
+.toolbar .ok { color:#16a34a; }
+.toolbar .warn { color:#d97706; }
+.toolbar .dirty { color:#b45309; font-weight:600; }
+button { border:1px solid #d1d5db; border-radius:5px; padding:5px 9px; background:#fff; color:#374151; cursor:pointer; font:inherit; }
+button:hover:not(:disabled) { border-color:#3b82f6; color:#1d4ed8; background:#eff6ff; }
+button:disabled { cursor:not-allowed; opacity:.45; }
+button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; background:#fef2f2; }
+.split { flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; overflow:hidden; }
+.pane { overflow:auto; padding:10px; }
+.pane-left { border-right:1px solid #e5e7eb; background:#f8fafc; }
+.pane-right { background:#fff; }
+.pdf-page { position:relative; margin:0 auto 12px; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
+.pdf-page > img { display:block; width:100%; }
+.pdf-page .page-num { position:absolute; bottom:2px; right:4px; font-size:9px; color:#6b7280; background:rgba(255,255,255,.9); padding:1px 4px; border-radius:3px; }
+.block-overlay { position:absolute; border:1px solid transparent; cursor:pointer; transition:all .12s; }
+.block-overlay.image-block { border-color:rgba(245,158,11,.25); background:rgba(245,158,11,.04); }
+.block-overlay:hover { border-color:#f59e0b; background:rgba(245,158,11,.12); }
+.block-overlay.active { border-color:#2563eb!important; background:rgba(37,99,235,.18)!important; z-index:10; box-shadow:0 0 0 1px #2563eb; }
+.md-line { display:block; cursor:pointer; padding:3px 8px; border-radius:4px; border-left:2px solid transparent; font-size:13px; line-height:1.55; font-family:'Cascadia Code',Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
+.md-line.match { border-left-color:rgba(245,158,11,.4); }
+.md-line.match:hover { background:rgba(245,158,11,.08); }
+.md-line.no-match { color:#9ca3af; }
+.md-line.active,.image-card.active { background:rgba(37,99,235,.08); border-color:#2563eb; box-shadow:inset 0 0 0 1px rgba(37,99,235,.25); }
+.badge { display:inline-block; font-size:10px; color:#6b7280; margin-left:6px; font-family:system-ui,sans-serif; }
+.image-card { border:1px solid #e5e7eb; border-left:3px solid #f59e0b; border-radius:7px; margin:8px 0; overflow:hidden; background:#fff; cursor:pointer; }
+.image-preview { min-height:90px; display:flex; align-items:center; justify-content:center; padding:10px; background:#f8fafc; }
+.image-preview img { display:block; max-width:100%; max-height:520px; object-fit:contain; }
+.image-error { color:#b91c1c; font-size:12px; padding:16px; word-break:break-all; }
+.image-meta { display:flex; align-items:center; gap:7px; padding:7px 9px; border-top:1px solid #e5e7eb; font-size:11px; color:#6b7280; }
+.image-path { flex:1; min-width:0; font-family:'Cascadia Code',Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.image-actions { display:flex; gap:6px; padding:0 9px 9px; justify-content:flex-end; }
+.empty { display:flex; align-items:center; justify-content:center; height:100%; color:#9ca3af; text-align:center; padding:30px; }
+@media (prefers-color-scheme:dark) {
+  :host { color:#e5e7eb; background:#111827; }
+  .toolbar,.pane-left,.image-meta { border-color:#374151; }
+  .pane-left,.image-preview { background:#111827; }
+  .pane-right,.image-card,.pdf-page,button { background:#1f2937; color:#e5e7eb; }
+  .image-card { border-color:#374151; border-left-color:#f59e0b; }
+  .image-meta { color:#9ca3af; }
+}
 `
 
 export class MineruLayoutViewer extends HTMLElement {
@@ -44,8 +70,20 @@ export class MineruLayoutViewer extends HTMLElement {
   private pages: { p: number; w: number; h: number; src: string }[] = []
   private activeIdx: number | null = null
   private pdfUrl: string | null = null
+  private renderedPdfUrl: string | null = null
+  private ownedPdfUrl: string | null = null
   private layoutData: string | null = null
+  private contentListData: string | null = null
   private markdownText: string | null = null
+  private zip: JSZip | null = null
+  private sourceZipName = 'mineru-result.zip'
+  private markdownPath = ''
+  private assetUrls = new Map<string, string>()
+  private undoStack: UndoAction[] = []
+  private reviewEdits: ReviewEdit[] = []
+  private resizeObserver: ResizeObserver | null = null
+  private imageObserver: IntersectionObserver | null = null
+  private rebuildSequence = 0
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
@@ -59,190 +97,293 @@ export class MineruLayoutViewer extends HTMLElement {
     this.setupResize()
   }
 
-  attributeChangedCallback(name: string, _old: string | null, newVal: string | null) {
-    if (name === 'pdf' && newVal) {
-      this.pdfUrl = newVal
-      this.loadPdf(newVal)
-    }
-    if (name === 'layout' && newVal) {
-      this.loadLayout(newVal)
-    }
-    if (name === 'markdown' && newVal) {
-      this.markdownText = newVal
-      this.rebuild()
-    }
+  disconnectedCallback() {
+    this.resizeObserver?.disconnect()
+    this.imageObserver?.disconnect()
+    this.revokeAssetUrls()
+    this.revokeOwnedPdfUrl()
   }
 
-  // ── Public API ──
+  attributeChangedCallback(name: string, _old: string | null, newValue: string | null) {
+    if (name === 'pdf' && newValue) {
+      this.pdfUrl = newValue
+      void this.loadPdf(newValue)
+    }
+    if (name === 'layout' && newValue) void this.loadLayout(newValue)
+    if (name === 'markdown' && newValue) {
+      this.markdownText = newValue
+      void this.rebuild()
+    }
+  }
 
   set pdf(value: string) { this.setAttribute('pdf', value) }
   get pdf(): string { return this.getAttribute('pdf') || '' }
-
   set layout(value: string) { this.setAttribute('layout', value) }
   get layout(): string { return this.getAttribute('layout') || '' }
-
   set markdown(value: string) { this.setAttribute('markdown', value) }
   get markdown(): string { return this.getAttribute('markdown') || '' }
 
-  /** Programmatic API: load layout JSON directly */
   async loadLayoutFromJson(data: Record<string, unknown> | string) {
-    const jsonStr = typeof data === 'string' ? data : JSON.stringify(data)
-    this.layoutData = jsonStr
-    if (this.pdfUrl) this.rebuild()
+    this.layoutData = typeof data === 'string' ? data : JSON.stringify(data)
+    await this.rebuild()
   }
 
-  /** Programmatic API: load markdown text directly */
   async loadMarkdown(text: string) {
     this.markdownText = text
-    if (this.layoutData) this.rebuild()
+    await this.rebuild()
   }
 
-  /** Programmatic API: load PDF + layout from a MinerU zip Blob */
+  /** Load one MinerU result ZIP and keep it in memory for review edits. */
   async loadZip(zipBlob: Blob) {
-    const JSZip = (window as any).JSZip || await import('jszip').then(m => m.default)
-    const zip = await JSZip.loadAsync(zipBlob)
-    let jsonStr = ''
+    this.resetReviewState()
+    this.zip = await JSZip.loadAsync(zipBlob)
+    this.sourceZipName = (zipBlob as File).name || 'mineru-result.zip'
 
-    for (const name of ['layout.json', 'middle.json']) {
-      const f = zip.file(name); if (f) { jsonStr = await f.async('text'); break }
-    }
-    if (!jsonStr) {
-      for (const name of Object.keys(zip.files)) {
-        if (name.endsWith('_layout.json') || name.endsWith('_middle.json')) {
-          jsonStr = await zip.file(name)!.async('text'); break
-        }
-      }
-    }
-    if (!jsonStr) {
-      for (const name of Object.keys(zip.files)) {
-        if (name.endsWith('_content_list.json')) {
-          jsonStr = await zip.file(name)!.async('text'); break
-        }
-      }
-    }
+    const names = Object.keys(this.zip.files).filter(name => !this.zip!.files[name].dir)
+    this.markdownPath = this.pickMarkdownPath(names)
+    if (!this.markdownPath) throw new Error('ZIP 中未找到 Markdown 文件')
 
-    const mdFile = zip.file('full.md')
-    if (mdFile) this.markdownText = await mdFile.async('text')
+    this.markdownText = await this.zip.file(this.markdownPath)!.async('text')
 
-    this.layoutData = jsonStr
+    const contentListPath = names.find(name =>
+      /(?:^|\/)(?:content_list|.+_content_list)\.json$/i.test(name),
+    )
+    const middlePath = names.find(name =>
+      /(?:^|\/)(?:middle|layout|.+_(?:middle|layout))\.json$/i.test(name),
+    )
 
-    // Find PDF
-    for (const name of Object.keys(zip.files)) {
-      if (name.endsWith('_origin.pdf')) {
-        const blob = await zip.file(name)!.async('blob')
-        this.pdfUrl = URL.createObjectURL(blob)
-        break
-      }
+    this.contentListData = contentListPath
+      ? await this.zip.file(contentListPath)!.async('text')
+      : null
+    this.layoutData = middlePath
+      ? await this.zip.file(middlePath)!.async('text')
+      : this.contentListData
+
+    if (!this.layoutData && !this.contentListData) {
+      throw new Error('ZIP 缺少 middle.json、layout.json 或 content_list.json')
     }
 
-    if (this.layoutData) this.rebuild()
-    else throw new Error('zip 缺少 layout.json 或 middle.json')
+    const pdfPath = names.find(name => /_origin\.pdf$/i.test(name))
+      || names.find(name => /\.pdf$/i.test(name))
+    if (pdfPath) {
+      const pdfBlob = await this.zip.file(pdfPath)!.async('blob')
+      this.ownedPdfUrl = URL.createObjectURL(pdfBlob)
+      this.pdfUrl = this.ownedPdfUrl
+    }
+
+    await this.rebuild()
   }
 
-  // ── Internal ──
+  /** Export the edited Markdown, replacement images, and an audit manifest. */
+  async exportEditedZip() {
+    if (!this.zip || !this.markdownPath || this.markdownText == null) return
+    const exportButton = this.shadowRoot?.getElementById('export') as HTMLButtonElement | null
+    if (exportButton) {
+      exportButton.disabled = true
+      exportButton.textContent = '正在生成 ZIP…'
+    }
+
+    try {
+      this.zip.file(this.markdownPath, this.markdownText)
+      this.zip.file('review_edits.json', JSON.stringify({
+        source: this.sourceZipName,
+        markdown: this.markdownPath,
+        exportedAt: new Date().toISOString(),
+        semantics: {
+          removedImages: 'Markdown reference removed; original ZIP asset and JSON retained',
+          replacedImages: 'Asset bytes replaced at the original path',
+        },
+        edits: this.reviewEdits,
+      }, null, 2))
+
+      const blob = await this.zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = this.sourceZipName.replace(/\.zip$/i, '') + '-edited.zip'
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      if (exportButton) exportButton.textContent = 'ZIP 已生成'
+    } catch (error) {
+      if (exportButton) exportButton.textContent = '导出失败'
+      alert(error instanceof Error ? error.message : String(error))
+    } finally {
+      setTimeout(() => {
+        if (!exportButton) return
+        exportButton.textContent = '导出修改版 ZIP'
+        exportButton.disabled = !this.zip
+      }, 1200)
+    }
+  }
+
+  async undoLastEdit() {
+    const action = this.undoStack.pop()
+    if (!action) return
+
+    this.reviewEdits.pop()
+    if (action.type === 'restore-markdown') {
+      this.markdownText = action.markdown
+      this.rebuildMarkdownOnly()
+    } else if (this.zip) {
+      this.zip.file(action.zipPath, action.data)
+      this.revokeAssetUrl(action.zipPath)
+      this.buildMarkdown()
+    }
+    this.updateToolbar()
+  }
 
   private render() {
     if (!this.shadowRoot) return
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>
       <div class="toolbar">
-        <span id="stat"></span>
-        <span style="flex:1"></span>
-        <a href="https://www.npmjs.com/package/mineru-layout-viewer" target="_blank" title="npm" style="color:inherit;display:flex;align-items:center;opacity:.5;transition:opacity .15s" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='.5'">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M0 7.334v8h6.666v1.332H12v-1.332h12v-8H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.001V8.667h5.334v5.332h-2.669v-.001zm12.001 0h-1.33v1.336h-1.336v1.336h-2.668V8.667h5.334v5.331z"/></svg>
-        </a>
-        <a href="https://github.com/rand777gg/mineru-layout-viewer" target="_blank" title="GitHub" style="color:inherit;display:flex;align-items:center;opacity:.5;transition:opacity .15s;margin-left:4px" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='.5'">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
-        </a>
+        <span id="stat">加载 MinerU ZIP 以开始</span>
+        <span id="dirty"></span>
+        <span class="spacer"></span>
+        <button id="undo" disabled>撤销</button>
+        <button id="export" disabled>导出修改版 ZIP</button>
       </div>
       <div class="split">
-        <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + layout.json 以开始</slot></div>
-        <div class="pane pane-right" id="mdPane"></div>
+        <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
+        <div class="pane pane-right" id="mdPane"><div class="empty">右侧将显示 Markdown 审核内容</div></div>
       </div>`
+
+    this.shadowRoot.getElementById('undo')!.addEventListener('click', () => {
+      void this.undoLastEdit()
+    })
+    this.shadowRoot.getElementById('export')!.addEventListener('click', () => {
+      void this.exportEditedZip()
+    })
   }
 
   private setupResize() {
-    const ro = new ResizeObserver(() => this.buildPdfOverlays())
+    this.resizeObserver?.disconnect()
+    this.resizeObserver = new ResizeObserver(() => this.buildPdfOverlays())
     const pane = this.shadowRoot?.getElementById('pdfPane')
-    if (pane) ro.observe(pane)
+    if (pane) this.resizeObserver.observe(pane)
   }
 
   private async loadPdf(url: string) {
     this.pdfUrl = url
-    if (this.layoutData || this.markdownText) await this.rebuild()
+    await this.rebuild()
   }
 
   private async loadLayout(url: string) {
-    const res = await fetch(url)
-    this.layoutData = await res.text()
-    if (this.pdfUrl) await this.rebuild()
+    const response = await fetch(url)
+    this.layoutData = await response.text()
+    await this.rebuild()
   }
 
   private async rebuild() {
-    if (!this.layoutData) return
-    this.blocks = parseBlocks(this.layoutData)
-    const md = this.markdownText || this.blocks.map(b => b.text || '').filter(Boolean).join('\n')
-    this.sections = matchMarkdownToPdf(md, this.blocks)
-    if (this.pdfUrl) await this.renderPdfPages()
+    const sequence = ++this.rebuildSequence
+    const primaryData = this.contentListData || this.layoutData
+    if (!primaryData) return
+
+    this.blocks = parseBlocks(primaryData)
+    const markdown = this.markdownText
+      || this.blocks.map(block => block.text || '').filter(Boolean).join('\n')
+    this.sections = matchMarkdownToPdf(markdown, this.blocks)
+
+    if (this.pdfUrl && this.renderedPdfUrl !== this.pdfUrl) {
+      await this.renderPdfPages()
+    }
+    if (sequence !== this.rebuildSequence) return
     this.buildUI()
+  }
+
+  private rebuildMarkdownOnly() {
+    this.sections = matchMarkdownToPdf(this.markdownText || '', this.blocks)
+    this.activeIdx = null
+    this.buildMarkdown()
+    this.buildPdfOverlays()
+    this.updateToolbar()
   }
 
   private async renderPdfPages() {
     if (!this.pdfUrl) return
-    const pdf = await pdfjsLib.getDocument(this.pdfUrl).promise
-    this.pages = []
+    const targetUrl = this.pdfUrl
+    const pdf = await pdfjsLib.getDocument(targetUrl).promise
+    const pages: { p: number; w: number; h: number; src: string }[] = []
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i)
-      const vp = page.getViewport({ scale: RENDER_SCALE })
-      const cvs = document.createElement('canvas')
-      cvs.width = vp.width; cvs.height = vp.height
-      await page.render({ canvasContext: cvs.getContext('2d')!, viewport: vp }).promise
-      this.pages.push({ p: i, w: vp.width, h: vp.height, src: cvs.toDataURL() })
+      const viewport = page.getViewport({ scale: RENDER_SCALE })
+      const canvas = document.createElement('canvas')
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+      await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
+      pages.push({ p: i, w: viewport.width, h: viewport.height, src: canvas.toDataURL() })
       page.cleanup()
     }
     pdf.destroy()
+    this.pages = pages
+    this.renderedPdfUrl = targetUrl
   }
 
   private buildUI() {
-    const shadow = this.shadowRoot!
-    const matched = this.sections.filter(s => s.bbox).length
-    shadow.getElementById('stat')!.innerHTML =
-      `${this.pages.length} 页 | ${this.sections.length} 行 | <span class="${matched > 0 ? 'ok' : 'warn'}">匹配 ${matched}</span> | ${this.blocks.length} 块`
+    this.updateToolbar()
     this.buildPdfOverlays()
     this.buildMarkdown()
   }
 
-  private buildPdfOverlays() {
-    const pane = this.shadowRoot!.getElementById('pdfPane')!
-    pane.innerHTML = ''
-    const containerW = pane.clientWidth - 20
-    if (containerW <= 0 || this.pages.length === 0) return
+  private updateToolbar() {
+    const shadow = this.shadowRoot
+    if (!shadow) return
+    const matched = this.sections.filter(section => section.bbox).length
+    const images = this.sections.filter(section => section.kind === 'image').length
+    shadow.getElementById('stat')!.innerHTML =
+      `${this.pages.length} 页 · ${this.sections.length} 行 · ${images} 张图片 · <span class="${matched ? 'ok' : 'warn'}">匹配 ${matched}</span>`
+    const dirty = shadow.getElementById('dirty')!
+    dirty.className = this.reviewEdits.length ? 'dirty' : ''
+    dirty.textContent = this.reviewEdits.length ? `已修改 ${this.reviewEdits.length} 项` : ''
+    ;(shadow.getElementById('undo') as HTMLButtonElement).disabled = this.undoStack.length === 0
+    ;(shadow.getElementById('export') as HTMLButtonElement).disabled = !this.zip
+  }
 
-    for (const rp of this.pages) {
-      const cssW = containerW
-      const cssH = rp.h * (containerW / rp.w)
-      const pageBlocks = this.blocks.filter(b => b.page_idx === rp.p - 1)
-      const pageScale = containerW / rp.w
-      const s = RENDER_SCALE * pageScale
+  private buildPdfOverlays() {
+    const pane = this.shadowRoot?.getElementById('pdfPane')
+    if (!pane) return
+    pane.innerHTML = ''
+    const containerWidth = pane.clientWidth - 20
+    if (containerWidth <= 0 || this.pages.length === 0) return
+
+    for (const renderedPage of this.pages) {
+      const cssWidth = containerWidth
+      const cssHeight = renderedPage.h * (containerWidth / renderedPage.w)
+      const pageBlocks = this.blocks.filter(block => block.page_idx === renderedPage.p - 1)
 
       const wrapper = document.createElement('div')
       wrapper.className = 'pdf-page'
-      wrapper.style.width = cssW + 'px'; wrapper.style.height = cssH + 'px'
-      wrapper.dataset.page = String(rp.p)
+      wrapper.style.width = `${cssWidth}px`
+      wrapper.style.height = `${cssHeight}px`
+      wrapper.dataset.page = String(renderedPage.p)
 
-      const img = document.createElement('img'); img.src = rp.src
-      wrapper.appendChild(img)
-      const label = document.createElement('span'); label.className = 'page-num'; label.textContent = String(rp.p)
+      const image = document.createElement('img')
+      image.src = renderedPage.src
+      wrapper.appendChild(image)
+
+      const label = document.createElement('span')
+      label.className = 'page-num'
+      label.textContent = String(renderedPage.p)
       wrapper.appendChild(label)
 
-      for (const b of pageBlocks) {
-        const [x0, y0, x1, y1] = b.bbox
-        const ov = document.createElement('div'); ov.className = 'block-overlay'
-        ov.style.left = (x0 * s) + 'px'; ov.style.top = (y0 * s) + 'px'
-        ov.style.width = Math.max((x1 - x0) * s, 2) + 'px'
-        ov.style.height = Math.max((y1 - y0) * s, 2) + 'px'
-        ov.title = (b.text || '').slice(0, 120)
-        ov.addEventListener('click', () => this.onBlockClick(b, ov))
-        wrapper.appendChild(ov)
+      for (const block of pageBlocks) {
+        const [x0, y0, x1, y1] = block.bbox
+        const overlay = document.createElement('div')
+        overlay.className = 'block-overlay' + (block.imagePath ? ' image-block' : '')
+        overlay.style.left = `${x0 * cssWidth}px`
+        overlay.style.top = `${y0 * cssHeight}px`
+        overlay.style.width = `${Math.max((x1 - x0) * cssWidth, 2)}px`
+        overlay.style.height = `${Math.max((y1 - y0) * cssHeight, 2)}px`
+        overlay.title = (block.imagePath || block.text || block.type || '').slice(0, 160)
+        overlay.dataset.blockId = block.id
+        overlay.addEventListener('click', () => this.onBlockClick(block, overlay))
+        wrapper.appendChild(overlay)
       }
       pane.appendChild(wrapper)
     }
@@ -250,61 +391,308 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private buildMarkdown() {
     const pane = this.shadowRoot!.getElementById('mdPane')!
+    this.imageObserver?.disconnect()
     pane.innerHTML = ''
-    for (let i = 0; i < this.sections.length; i++) {
-      const sec = this.sections[i]
-      const el = document.createElement('span')
-      el.className = 'md-line' + (sec.bbox ? ' match' : ' no-match')
-      el.dataset.idx = String(i)
-      el.textContent = sec.text
-      if (sec.bbox) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = `p${sec.page}`; el.appendChild(b) }
-      el.addEventListener('click', () => this.onMdClick(sec, i, el))
-      pane.appendChild(el)
+    if (!this.sections.length) {
+      pane.innerHTML = '<div class="empty">没有可显示的 Markdown 内容</div>'
+      return
     }
-  }
 
-  private onMdClick(sec: MdSection, idx: number, el: HTMLElement) {
-    const shadow = this.shadowRoot!
-    shadow.querySelectorAll('.md-line.active').forEach(e => e.classList.remove('active'))
-    shadow.querySelectorAll('.block-overlay.active').forEach(e => e.classList.remove('active'))
-    el.classList.add('active'); this.activeIdx = idx
-    if (sec.bbox) {
-      const pageEl = shadow.querySelector(`.pdf-page[data-page="${sec.page}"]`) as HTMLElement | null
-      if (pageEl) pageEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      const overlays = shadow.querySelectorAll(`.pdf-page[data-page="${sec.page}"] .block-overlay`)
-      const page = this.pages[sec.page - 1]
-      if (page) {
-        const pw = shadow.getElementById('pdfPane')!.clientWidth - 20
-        const s = RENDER_SCALE * (pw / page.w)
-        overlays.forEach(ov => {
-          const el2 = ov as HTMLElement
-          const dx = Math.abs(parseFloat(el2.style.left) - sec.bbox![0] * s)
-          const dy = Math.abs(parseFloat(el2.style.top) - sec.bbox![1] * s)
-          if (dx < 4 && dy < 4) {
-            el2.classList.add('active'); el2.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          }
-        })
+    for (let index = 0; index < this.sections.length; index++) {
+      const section = this.sections[index]
+      if (section.kind === 'image' && section.imagePath) {
+        pane.appendChild(this.createImageCard(section, index))
+      } else {
+        const line = document.createElement('span')
+        line.className = 'md-line ' + (section.bbox ? 'match' : 'no-match')
+        line.dataset.idx = String(index)
+        line.textContent = section.text
+        if (section.bbox) {
+          const badge = document.createElement('span')
+          badge.className = 'badge'
+          badge.textContent = `p${section.page}`
+          line.appendChild(badge)
+        }
+        line.addEventListener('click', () => this.onMdClick(section, index, line))
+        pane.appendChild(line)
       }
     }
   }
 
-  private onBlockClick(block: PdfBlock, ov: HTMLElement) {
+  private createImageCard(section: MdSection, index: number): HTMLElement {
+    const card = document.createElement('article')
+    card.className = 'image-card' + (section.bbox ? ' match' : ' no-match')
+    card.dataset.idx = String(index)
+    card.dataset.imagePath = section.imagePath
+
+    const preview = document.createElement('div')
+    preview.className = 'image-preview'
+    preview.textContent = '加载图片…'
+    card.appendChild(preview)
+
+    const meta = document.createElement('div')
+    meta.className = 'image-meta'
+    const path = document.createElement('span')
+    path.className = 'image-path'
+    path.title = section.imagePath!
+    path.textContent = section.imagePath!
+    meta.appendChild(path)
+    if (section.bbox) {
+      const badge = document.createElement('span')
+      badge.className = 'badge'
+      badge.textContent = `p${section.page}`
+      meta.appendChild(badge)
+    }
+    card.appendChild(meta)
+
+    const actions = document.createElement('div')
+    actions.className = 'image-actions'
+    const replaceButton = document.createElement('button')
+    replaceButton.textContent = '替换图片'
+    replaceButton.addEventListener('click', event => {
+      event.stopPropagation()
+      this.chooseReplacement(section)
+    })
+    const removeButton = document.createElement('button')
+    removeButton.className = 'danger'
+    removeButton.textContent = '从 Markdown 删除'
+    removeButton.addEventListener('click', event => {
+      event.stopPropagation()
+      this.removeImageReference(section)
+    })
+    actions.append(replaceButton, removeButton)
+    card.appendChild(actions)
+
+    card.addEventListener('click', () => this.onMdClick(section, index, card))
+    this.observeImageCard(card)
+
+    return card
+  }
+
+  private observeImageCard(card: HTMLElement) {
+    if (typeof IntersectionObserver === 'undefined') {
+      void this.loadImageCard(card)
+      return
+    }
+    if (!this.imageObserver) {
+      const pane = this.shadowRoot!.getElementById('mdPane')!
+      this.imageObserver = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue
+          const target = entry.target as HTMLElement
+          this.imageObserver?.unobserve(target)
+          void this.loadImageCard(target)
+        }
+      }, { root: pane, rootMargin: '600px 0px' })
+    }
+    this.imageObserver.observe(card)
+  }
+
+  private async loadImageCard(card: HTMLElement) {
+    const imagePath = card.dataset.imagePath
+    const preview = card.querySelector('.image-preview') as HTMLElement | null
+    if (!imagePath || !preview) return
+    try {
+      const url = await this.getAssetUrl(imagePath)
+      if (!card.isConnected) return
+      preview.textContent = ''
+      const image = document.createElement('img')
+      image.src = url
+      image.alt = imagePath
+      preview.appendChild(image)
+    } catch (error) {
+      if (!card.isConnected) return
+      preview.textContent = ''
+      const message = document.createElement('div')
+      message.className = 'image-error'
+      message.textContent = error instanceof Error ? error.message : String(error)
+      preview.appendChild(message)
+    }
+  }
+
+  private onMdClick(section: MdSection, index: number, element: HTMLElement) {
     const shadow = this.shadowRoot!
-    shadow.querySelectorAll('.md-line.active').forEach(e => e.classList.remove('active'))
-    shadow.querySelectorAll('.block-overlay.active').forEach(e => e.classList.remove('active'))
-    ov.classList.add('active')
-    const blockNorm = normalize(block.text || '')
-    let bestIdx = -1, bestSim = 0
-    for (let i = 0; i < this.sections.length; i++) {
-      if (!this.sections[i].bbox) continue
-      const sim = lcsSimilarity(blockNorm, normalize(this.sections[i].text))
-      if (sim > bestSim && sim > 0.05) { bestSim = sim; bestIdx = i }
+    shadow.querySelectorAll('.active').forEach(item => item.classList.remove('active'))
+    element.classList.add('active')
+    this.activeIdx = index
+    if (!section.bbox) return
+
+    const pageElement = shadow.querySelector(`.pdf-page[data-page="${section.page}"]`) as HTMLElement | null
+    pageElement?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const overlays = shadow.querySelectorAll('.block-overlay')
+    overlays.forEach(item => {
+      const overlay = item as HTMLElement
+      if (overlay.dataset.blockId === section.blockId) {
+        overlay.classList.add('active')
+        overlay.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    })
+  }
+
+  private onBlockClick(block: PdfBlock, overlay: HTMLElement) {
+    const shadow = this.shadowRoot!
+    shadow.querySelectorAll('.active').forEach(item => item.classList.remove('active'))
+    overlay.classList.add('active')
+
+    let bestIndex = this.sections.findIndex(section => section.blockId === block.id)
+    if (bestIndex < 0 && block.imagePath) {
+      const target = normalizeAssetPath(block.imagePath)
+      bestIndex = this.sections.findIndex(section =>
+        section.imagePath && normalizeAssetPath(section.imagePath) === target,
+      )
     }
-    if (bestIdx >= 0) {
-      this.activeIdx = bestIdx
-      const el = shadow.querySelector(`[data-idx="${bestIdx}"]`) as HTMLElement | null
-      if (el) { el.classList.add('active'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }) }
+    if (bestIndex < 0 && block.text) {
+      const blockNorm = normalize(block.text)
+      let bestSimilarity = 0
+      for (let index = 0; index < this.sections.length; index++) {
+        const similarity = lcsSimilarity(blockNorm, normalize(this.sections[index].text))
+        if (similarity > bestSimilarity && similarity > 0.05) {
+          bestSimilarity = similarity
+          bestIndex = index
+        }
+      }
     }
+
+    if (bestIndex >= 0) {
+      this.activeIdx = bestIndex
+      const element = shadow.querySelector(`[data-idx="${bestIndex}"]`) as HTMLElement | null
+      if (element) {
+        element.classList.add('active')
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }
+  }
+
+  private chooseReplacement(section: MdSection) {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.jpg,.jpeg,.png,.webp,.gif,.bmp'
+    input.addEventListener('change', () => {
+      const file = input.files?.[0]
+      if (file) void this.replaceImage(section, file)
+    })
+    input.click()
+  }
+
+  private async replaceImage(section: MdSection, file: File) {
+    if (!this.zip || !section.imagePath) return
+    const zipPath = this.resolveAssetPath(section.imagePath)
+    const entry = this.zip.file(zipPath)
+    if (!entry) {
+      alert(`ZIP 中找不到原图片：${zipPath}`)
+      return
+    }
+
+    const oldExtension = this.canonicalExtension(section.imagePath)
+    const newExtension = this.canonicalExtension(file.name)
+    if (!oldExtension || oldExtension !== newExtension) {
+      alert(`替换图片格式必须一致：原图为 ${oldExtension || '未知'}，新图为 ${newExtension || '未知'}`)
+      return
+    }
+
+    const previousData = await entry.async('uint8array')
+    this.undoStack.push({ type: 'restore-image', zipPath, data: previousData })
+    this.zip.file(zipPath, file)
+    this.revokeAssetUrl(zipPath)
+    this.reviewEdits.push({
+      type: 'replace-image',
+      imagePath: section.imagePath,
+      timestamp: new Date().toISOString(),
+    })
+    this.buildMarkdown()
+    this.updateToolbar()
+  }
+
+  private removeImageReference(section: MdSection) {
+    if (this.markdownText == null) return
+    this.undoStack.push({ type: 'restore-markdown', markdown: this.markdownText })
+    this.markdownText =
+      this.markdownText.slice(0, section.start)
+      + this.markdownText.slice(section.end)
+    this.reviewEdits.push({
+      type: 'remove-image-reference',
+      imagePath: section.imagePath,
+      timestamp: new Date().toISOString(),
+    })
+    this.rebuildMarkdownOnly()
+  }
+
+  private pickMarkdownPath(names: string[]): string {
+    const markdownFiles = names.filter(name => /\.md$/i.test(name))
+    return markdownFiles.find(name => /(?:^|\/)full\.md$/i.test(name))
+      || markdownFiles.sort((a, b) => a.split('/').length - b.split('/').length)[0]
+      || ''
+  }
+
+  private resolveAssetPath(imagePath: string): string {
+    if (!this.zip) return normalizeAssetPath(imagePath)
+    const normalized = normalizeAssetPath(imagePath).replace(/^\/+/, '')
+    if (normalized.split('/').includes('..')) return '__invalid_asset_path__'
+    const markdownDirectory = this.markdownPath.includes('/')
+      ? this.markdownPath.slice(0, this.markdownPath.lastIndexOf('/') + 1)
+      : ''
+    const candidates = [normalized, markdownDirectory + normalized]
+    for (const candidate of candidates) {
+      if (this.zip.file(candidate)) return candidate
+    }
+
+    const filename = normalized.slice(normalized.lastIndexOf('/') + 1)
+    const sameName = Object.keys(this.zip.files).filter(name =>
+      !this.zip!.files[name].dir && name.slice(name.lastIndexOf('/') + 1) === filename,
+    )
+    return sameName.length === 1 ? sameName[0] : markdownDirectory + normalized
+  }
+
+  private async getAssetUrl(imagePath: string): Promise<string> {
+    if (!this.zip) throw new Error('图片预览仅支持从 MinerU ZIP 加载')
+    const zipPath = this.resolveAssetPath(imagePath)
+    const cached = this.assetUrls.get(zipPath)
+    if (cached) return cached
+    const entry = this.zip.file(zipPath)
+    if (!entry) throw new Error(`ZIP 中找不到图片：${zipPath}`)
+    const blob = await entry.async('blob')
+    const url = URL.createObjectURL(blob)
+    this.assetUrls.set(zipPath, url)
+    return url
+  }
+
+  private canonicalExtension(path: string): string {
+    const clean = path.split(/[?#]/, 1)[0]
+    const extension = clean.includes('.') ? clean.slice(clean.lastIndexOf('.') + 1).toLowerCase() : ''
+    return extension === 'jpg' ? 'jpeg' : extension
+  }
+
+  private revokeAssetUrl(zipPath: string) {
+    const url = this.assetUrls.get(zipPath)
+    if (url) URL.revokeObjectURL(url)
+    this.assetUrls.delete(zipPath)
+  }
+
+  private revokeAssetUrls() {
+    for (const url of this.assetUrls.values()) URL.revokeObjectURL(url)
+    this.assetUrls.clear()
+  }
+
+  private revokeOwnedPdfUrl() {
+    if (this.ownedPdfUrl) URL.revokeObjectURL(this.ownedPdfUrl)
+    this.ownedPdfUrl = null
+  }
+
+  private resetReviewState() {
+    this.revokeAssetUrls()
+    this.revokeOwnedPdfUrl()
+    this.zip = null
+    this.markdownPath = ''
+    this.markdownText = null
+    this.layoutData = null
+    this.contentListData = null
+    this.pdfUrl = null
+    this.renderedPdfUrl = null
+    this.pages = []
+    this.blocks = []
+    this.sections = []
+    this.undoStack = []
+    this.reviewEdits = []
   }
 }
 

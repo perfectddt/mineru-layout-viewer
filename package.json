@@ -25,6 +25,7 @@
   "scripts": {
     "build": "tsc --noEmit && node build.mjs",
     "dev": "node build.mjs --watch",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

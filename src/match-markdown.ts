@@ -1,6 +1,6 @@
 import type { PdfBlock, MdSection } from './parse-blocks.js'
-
-// ── Text normalization ──
+import { normalizeAssetPath } from './parse-blocks.js'
+import { parseMarkdownSections } from './parse-markdown.js'
 
 export function normalize(s: string): string {
   return s
@@ -10,7 +10,10 @@ export function normalize(s: string): string {
     .toLowerCase()
 }
 
-// ── LCS-based similarity (longest common substring) ──
+function basename(path: string): string {
+  const normalized = normalizeAssetPath(path)
+  return normalized.slice(normalized.lastIndexOf('/') + 1)
+}
 
 export function lcsSimilarity(a: string, b: string): number {
   const shorter = a.length < b.length ? a : b
@@ -33,67 +36,87 @@ export function lcsSimilarity(a: string, b: string): number {
   return maxLen / Math.max(shorter.length, 1)
 }
 
-// ── Match markdown paragraphs to PDF blocks ──
+function imageBlockFor(section: MdSection, blocks: PdfBlock[]): PdfBlock | undefined {
+  if (!section.imagePath) return undefined
+  const target = normalizeAssetPath(section.imagePath)
+  const exact = blocks.find(block =>
+    block.imagePath && normalizeAssetPath(block.imagePath) === target,
+  )
+  if (exact) return exact
+
+  const targetName = basename(target)
+  const sameName = blocks.filter(block =>
+    block.imagePath && basename(block.imagePath) === targetName,
+  )
+  return sameName.length === 1 ? sameName[0] : undefined
+}
+
+export function matchSectionsToPdf(
+  sections: MdSection[],
+  blocks: PdfBlock[],
+): MdSection[] {
+  const textBlocks = blocks.filter(block =>
+    block.text && block.text.trim().length > 1,
+  )
+  const pageCount = blocks.length
+    ? Math.max(...blocks.map(block => block.page_idx)) + 1
+    : 1
+
+  return sections.map((section, sectionIndex) => {
+    if (section.kind === 'image') {
+      const block = imageBlockFor(section, blocks)
+      return block
+        ? { ...section, page: block.page_idx + 1, bbox: block.bbox, blockId: block.id }
+        : section
+    }
+
+    const norm = normalize(section.text)
+    if (norm.length < 4 || textBlocks.length === 0) return section
+
+    let best: PdfBlock | null = null
+    let bestScore = 0
+    const topBlocks = textBlocks.filter(block =>
+      block.type !== 'table-body' && block.type !== 'table-row',
+    )
+
+    for (const block of topBlocks) {
+      const score = lcsSimilarity(norm, normalize(block.text!))
+      if (score > bestScore) {
+        bestScore = score
+        best = block
+      }
+    }
+
+    if (bestScore < 0.2) {
+      for (const block of textBlocks) {
+        const score = lcsSimilarity(norm, normalize(block.text!))
+        if (score > bestScore) {
+          bestScore = score
+          best = block
+        }
+      }
+    }
+
+    if (!best || bestScore < 0.1) {
+      const estimatedPage = Math.min(
+        pageCount,
+        Math.floor(sectionIndex / Math.max(sections.length, 1) * pageCount) + 1,
+      )
+      return { ...section, page: estimatedPage }
+    }
+
+    return {
+      ...section,
+      page: best.page_idx + 1,
+      bbox: best.bbox,
+      blockId: best.id,
+    }
+  })
+}
 
 export function matchMarkdownToPdf(
   markdown: string,
   blocks: PdfBlock[],
 ): MdSection[] {
-  // Split by line breaks — layout.json / middle.json blocks are line-level
-  const paragraphs = markdown.split(/\n+/).filter((p) => p.trim())
-  const textBlocks = blocks.filter(
-    (b) => b.text && b.text.trim().length > 1,
-  )
-
-  if (textBlocks.length === 0) {
-    return paragraphs.map((p) => ({ text: p, page: 1, bbox: null }))
-  }
-
-  return paragraphs.map((para) => {
-    const norm = normalize(para)
-    if (norm.length < 4) {
-      return { text: para, page: textBlocks[0].page_idx + 1, bbox: textBlocks[0].bbox }
-    }
-
-    let best: PdfBlock | null = null
-    let bestScore = 0
-
-    // First pass: skip table internals
-    const topBlocks = textBlocks.filter(
-      (b) => b.type !== 'table-body' && b.type !== 'table-row',
-    )
-    for (const b of topBlocks) {
-      const s = lcsSimilarity(norm, normalize(b.text!))
-      if (s > bestScore) {
-        bestScore = s
-        best = b
-      }
-    }
-
-    // Fallback: include table blocks
-    if (bestScore < 0.2) {
-      for (const b of textBlocks) {
-        const s = lcsSimilarity(norm, normalize(b.text!))
-        if (s > bestScore) {
-          bestScore = s
-          best = b
-        }
-      }
-    }
-
-    // If nothing matches well, estimate by paragraph position
-    if (!best || bestScore < 0.1) {
-      const ratio =
-        paragraphs.indexOf(para) / Math.max(paragraphs.length, 1)
-      const estPage = Math.floor(
-        ratio *
-          (blocks.length > 0
-            ? Math.max(...blocks.map((b) => b.page_idx)) + 1
-            : 1),
-      )
-      return { text: para, page: estPage + 1, bbox: null }
-    }
-
-    return { text: para, page: best.page_idx + 1, bbox: best.bbox }
-  })
+  return matchSectionsToPdf(parseMarkdownSections(markdown), blocks)
 }

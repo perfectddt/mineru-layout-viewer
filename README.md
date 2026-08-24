@@ -29,6 +29,10 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Nested block handling** — resolves list items, table cells, and other nested blocks to their leaf coordinates
 - **Framework-agnostic** — built as a Web Component, works with React, Vue, or plain HTML
 - **Zip support** — drop a MinerU output `.zip` directly, auto-extracts PDF + layout + markdown
+- **Image review cards** — render image assets from the ZIP and map them to PDF image blocks by path
+- **Lazy image loading** — only decode image cards near the viewport for large review jobs
+- **Replace / soft-delete / undo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
+- **Edited ZIP export** — download a new ZIP with edited Markdown, replacement assets, and `review_edits.json`
 
 ### Installation
 
@@ -69,6 +73,8 @@ Set the PDF.js worker:
 <script>
   const viewer = document.querySelector('mineru-layout-viewer')
   await viewer.loadZip(zipBlob)  // from MinerU export .zip
+  await viewer.undoLastEdit()
+  await viewer.exportEditedZip()
 </script>
 
 <!-- Programmatic API (JSON) -->
@@ -105,10 +111,12 @@ Parses a MinerU JSON file (`layout.json`, `middle.json`, or `content_list.json`)
 
 ```ts
 interface PdfBlock {
+  id: string
   page_idx: number              // 0-based page index
-  bbox: [number, number, number, number]  // [x0, y0, x1, y1] — top-left origin
+  bbox: [number, number, number, number]  // normalized [x0,y0,x1,y1], 0..1
   text?: string                  // extracted span content
   type?: string                  // block type: "text", "title", "list", etc.
+  imagePath?: string             // image path inside the MinerU result
 }
 ```
 
@@ -118,9 +126,16 @@ Matches markdown text (split by lines) to PDF blocks using LCS similarity.
 
 ```ts
 interface MdSection {
+  id: string
+  raw: string
   text: string
+  start: number                  // exact source offsets in Markdown
+  end: number
+  kind: 'text' | 'image' | 'other'
+  imagePath?: string
   page: number                   // 1-based page number
   bbox: [number, number, number, number] | null
+  blockId?: string
 }
 ```
 
@@ -139,6 +154,22 @@ interface MdSection {
 | `loadZip(blob: Blob): Promise<void>`    | Load from a MinerU export .zip        |
 | `loadLayoutFromJson(data: object\|string)`| Load layout JSON directly           |
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
+| `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
+| `exportEditedZip(): Promise<void>`       | Download the edited result ZIP         |
+
+### Image edit semantics
+
+- **Replace** requires the replacement to use the same image format and overwrites the bytes at the original ZIP path. Markdown and JSON paths therefore stay valid.
+- **Remove from Markdown** removes only the image reference from Markdown. The original asset and JSON are retained for review/audit and the operation is recorded in `review_edits.json`.
+- The original ZIP is never overwritten; export creates an `-edited.zip` download.
+
+### Local development
+
+```bash
+npm ci
+npm test
+npx serve .
+```
 
 ### Supported JSON Formats
 
@@ -177,6 +208,10 @@ MIT
 - **嵌套块解析** — 将列表项、表格单元格等嵌套块解析到叶子节点坐标
 - **框架无关** — 基于 Web Component，支持 React、Vue 或原生 HTML
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
+- **图片审核卡片** — 显示 ZIP 内的真实图片，并通过图片路径与 PDF 图片框精确关联
+- **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
+- **替换、软删除、撤销** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
+- **导出修改版 ZIP** — 导出修改后的 Markdown、图片以及 `review_edits.json` 操作记录
 
 ### 安装
 
@@ -217,6 +252,8 @@ npm install mineru-layout-viewer
 <script>
   const viewer = document.querySelector('mineru-layout-viewer')
   await viewer.loadZip(zipBlob)  // 从 MinerU 导出 .zip 加载
+  await viewer.undoLastEdit()
+  await viewer.exportEditedZip()
 </script>
 
 <!-- 编程 API（直接传 JSON） -->
@@ -253,10 +290,12 @@ const sections = matchMarkdownToPdf(markdown, blocks)
 
 ```ts
 interface PdfBlock {
+  id: string
   page_idx: number              // 0-based 页码
-  bbox: [number, number, number, number]  // [x0, y0, x1, y1] — 左上角原点
+  bbox: [number, number, number, number]  // 归一化 0..1 坐标
   text?: string                  // 提取的 span 文本
   type?: string                  // block 类型："text"、"title"、"list" 等
+  imagePath?: string             // MinerU 结果内的图片路径
 }
 ```
 
@@ -266,9 +305,16 @@ interface PdfBlock {
 
 ```ts
 interface MdSection {
+  id: string
+  raw: string
   text: string
+  start: number                  // Markdown 中的精确字符位置
+  end: number
+  kind: 'text' | 'image' | 'other'
+  imagePath?: string
   page: number                   // 1-based 页码
   bbox: [number, number, number, number] | null
+  blockId?: string
 }
 ```
 
@@ -287,6 +333,22 @@ interface MdSection {
 | `loadZip(blob: Blob): Promise<void>`    | 从 Mineru 导出 .zip 加载    |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
+| `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
+| `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
+
+### 图片修改规则
+
+- **替换图片**：新旧图片格式必须一致，图片内容覆盖到 ZIP 中的原始路径，因此 Markdown 和 JSON 路径无需改变。
+- **从 Markdown 删除**：只删除 Markdown 图片引用，原图片和 JSON 保留用于审核追溯，并在 `review_edits.json` 中记录操作。
+- 工具不会覆盖原始 ZIP，导出文件名为 `原文件名-edited.zip`。
+
+### 本地开发
+
+```bash
+npm ci
+npm test
+npx serve .
+```
 
 ### 支持的 JSON 格式
 

@@ -26,8 +26,9 @@ body { height: 100vh; font-family: system-ui, sans-serif; }
 
 <div id="dropZone" class="drop-zone">
   <div class="hint">
-    <h3>🧪 mineru-layout-viewer 测试</h3>
+    <h3>MinerU 图片审核编辑器</h3>
     <p>拖放或点击选择 MinerU 导出 .zip</p>
+    <p>支持图片定位、替换、软删除、撤销和导出修改版 ZIP</p>
     <p style="font-size:11px;margin-top:12px">
       <a href="https://www.npmjs.com/package/mineru-layout-viewer" target="_blank">npm</a>
       &nbsp;·&nbsp;
@@ -61,21 +62,28 @@ dropZone.addEventListener('drop', async e => {
 })
 
 async function handleFiles(files) {
-  const zip = files.find(f => f.name.endsWith('.zip'))
-  if (zip) {
-    dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
-    await viewer.loadZip(zip)
-    return
-  }
-  let pdfFile, jsonFile
-  for (const f of files) {
-    if (f.name.endsWith('.pdf')) pdfFile = f
-    else if (f.name.endsWith('.json')) jsonFile = f
-  }
-  if (jsonFile) {
-    dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
-    await viewer.loadLayoutFromJson(await jsonFile.text())
-    if (pdfFile) viewer.setAttribute('pdf', URL.createObjectURL(pdfFile))
+  try {
+    const zip = files.find(f => f.name.toLowerCase().endsWith('.zip'))
+    if (zip) {
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadZip(zip)
+      return
+    }
+    let pdfFile, jsonFile
+    for (const f of files) {
+      if (f.name.toLowerCase().endsWith('.pdf')) pdfFile = f
+      else if (f.name.toLowerCase().endsWith('.json')) jsonFile = f
+    }
+    if (jsonFile) {
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadLayoutFromJson(await jsonFile.text())
+      if (pdfFile) viewer.setAttribute('pdf', URL.createObjectURL(pdfFile))
+      return
+    }
+    throw new Error('请选择 MinerU ZIP，或同时选择 PDF 与 JSON')
+  } catch (error) {
+    viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
+    alert(error instanceof Error ? error.message : String(error))
   }
 }
 </script>
