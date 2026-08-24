@@ -4,7 +4,7 @@
 <style>html,body,mineru-layout-viewer{height:100%;margin:0;display:block}</style>
 <mineru-layout-viewer id="viewer"></mineru-layout-viewer>
 <input id="folderFixture" type="file" webkitdirectory multiple hidden>
-<input id="markdownFixture" type="file" accept=".md" hidden>
+<input id="markdownFixture" type="file" accept=".md,.org" hidden>
 <script type="module">
   let markdown = `# 富 Markdown 验收
 
@@ -40,9 +40,34 @@
     const { default: theme } = await import('../plugins/phycat-prussian-theme.js')
     viewer.registerMarkdownRenderPlugin(theme)
   }
+  if (new URLSearchParams(location.search).has('everforest')) {
+    const { default: theme } = await import('../plugins/everforest-org-theme.js')
+    viewer.registerMarkdownRenderPlugin(theme)
+  }
   if (new URLSearchParams(location.search).has('standalone')) {
     const source = await fetch('../README.md').then(response => response.text())
     await viewer.loadMarkdownFile(new File([source], 'README.md', { type: 'text/markdown' }))
+  }
+  if (new URLSearchParams(location.search).has('org')) {
+    const source = `#+TITLE: Org 实时编辑验收
+#+AUTHOR: MinerU
+
+* 一级标题
+这是带有 *粗体*、/斜体/ 和 [[https://orgmode.org][Org 链接]] 的正文。
+
+** TODO 二级任务
+- [X] 已完成
+- [ ] 待处理
+
+| 项目 | 状态 |
+|------+------|
+| Org  | 正常 |
+
+#+BEGIN_SRC javascript
+console.log('everforest')
+#+END_SRC
+`
+    await viewer.loadMarkdownFile(new File([source], 'sample.org', { type: 'text/org' }))
   }
   if (new URLSearchParams(location.search).has('directory')) {
     await viewer.loadDirectoryEntries([

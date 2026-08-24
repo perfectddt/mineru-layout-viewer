@@ -4,6 +4,7 @@ import { matchMarkdownToPdf, matchSectionsToPdf, normalize, lcsSimilarity } from
 import { parseMarkdownSections } from './parse-markdown.js'
 import { MarkdownPreviewRenderer, type MarkdownRenderPlugin } from './markdown-preview.js'
 import { createElegantReadingTheme, createRichMarkdownPlugin } from './rich-markdown-plugin.js'
+import { documentFormatFromName, orgToMarkdown, type DocumentFormat } from './org-format.js'
 import {
   MarkdownSourceEditor,
   createVimEditorPlugin,
@@ -50,6 +51,16 @@ interface SearchResult {
   sectionIndex: number
   snippet: string
   match: string
+}
+
+interface LiveEditSession {
+  element: HTMLElement
+  start: number
+  end: number
+  originalEnd: number
+  originalDocument: string
+  originalSections: MdSection[]
+  changed: boolean
 }
 
 type OutlineLayout = 'side' | 'stack'
@@ -206,9 +217,10 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .inline-editor textarea { display:block; width:100%; min-height:120px; max-height:55vh; resize:vertical; border:0; outline:0; padding:10px; font:14px/1.65 'Cascadia Code',Consolas,monospace; }
 .inline-editor-preview { min-height:120px; max-height:55vh; overflow:auto; padding:10px 16px; }
 .inline-editor [hidden] { display:none!important; }
-.live-preview-mode [data-md-start-line] { cursor:text; }
-.typora-live-editor { margin:.35em 0; box-shadow:inset 3px 0 0 #2563eb,0 3px 12px rgba(37,99,235,.12); }
-.typora-live-editor textarea { min-height:76px; max-height:42vh; }
+.live-preview-mode .live-editable { cursor:text; min-height:1.4em; outline:0; caret-color:#2563eb; }
+.live-preview-mode .live-editable:hover { box-shadow:inset 3px 0 0 rgba(37,99,235,.3); }
+.live-preview-mode .live-editable:focus { background:rgba(37,99,235,.045); box-shadow:inset 3px 0 0 #2563eb; }
+.live-preview-mode .live-editable:empty::before { content:'输入内容…'; color:#94a3b8; }
 .source-editor-host { flex:1; width:100%; height:100%; min-height:0; overflow:hidden; }
 .source-editor-host .cm-editor { height:100%; }
 .standalone-source-split { position:relative; display:grid; grid-template-columns:var(--standalone-first, 50%) 1fr; gap:0; width:100%; height:100%; min-height:0; overflow:hidden; }
@@ -291,6 +303,8 @@ export class MineruLayoutViewer extends HTMLElement {
   private sourceMarkdownFileHandle: FileSystemFileHandle | null = null
   private pendingDeletedAssets = new Set<string>()
   private standaloneMarkdown = false
+  private documentFormat: DocumentFormat = 'markdown'
+  private liveEditSession: LiveEditSession | null = null
   private panesSwapped = false
   private pdfOutline: PdfOutlineItem[] = []
   private progressStartedAt = 0
@@ -300,6 +314,7 @@ export class MineruLayoutViewer extends HTMLElement {
   private viewerSettings: ViewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
   private activeDefaultRenderPluginName = 'mineru-reading-theme'
   private activeDefaultRenderPluginLabel = '内置阅读主题'
+  private documentPluginFontStyle: HTMLStyleElement | null = null
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
@@ -323,6 +338,8 @@ export class MineruLayoutViewer extends HTMLElement {
     this.pdfPageObserver?.disconnect()
     this.sourceEditor?.destroy()
     this.sourceEditor = null
+    this.documentPluginFontStyle?.remove()
+    this.documentPluginFontStyle = null
     void this.pdfDocument?.destroy()
     this.revokeAssetUrls()
     this.revokeOwnedPdfUrl()
@@ -353,21 +370,24 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   async loadMarkdown(text: string) {
+    this.documentFormat = 'markdown'
     this.markdownText = text
     await this.rebuild()
   }
 
-  /** Open one Markdown file without MinerU layout/PDF data. */
+  /** Open one Markdown or Org file without MinerU layout/PDF data. */
   async loadMarkdownFile(file: File, handle?: FileSystemFileHandle) {
     this.resetReviewState()
-    this.startLoadProgress('正在读取 Markdown…')
+    this.documentFormat = documentFormatFromName(file.name)
+    const formatLabel = this.documentFormat === 'org' ? 'Org' : 'Markdown'
+    this.startLoadProgress(`正在读取 ${formatLabel}…`)
     this.standaloneMarkdown = true
     this.sourceMarkdownFileHandle = handle || null
     this.markdownPath = file.name
     this.sourceZipName = file.name
     this.markdownText = await file.text()
     this.sections = parseMarkdownSections(this.markdownText)
-    this.setLoadProgress(80, '正在渲染 Markdown…')
+    this.setLoadProgress(80, `正在渲染 ${formatLabel}…`)
     this.buildUI()
     this.finishLoadProgress(`已打开 ${file.name}`)
   }
@@ -552,6 +572,7 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!this.markdownPath) throw new Error('ZIP 中未找到 Markdown 文件')
 
     this.markdownText = await this.zip.file(this.markdownPath)!.async('text')
+    this.documentFormat = 'markdown'
 
     const contentListPath = names.find(name =>
       /(?:^|\/)(?:content_list|.+_content_list)\.json$/i.test(name),
@@ -755,9 +776,9 @@ export class MineruLayoutViewer extends HTMLElement {
         <section class="pane-column right-column" id="rightColumn">
           <div class="pane-toolbar">
             <button id="toggleMdOutline" class="menu-toggle" title="显示或隐藏 Markdown 大纲">☰</button>
-            <strong>Markdown</strong>
+            <strong id="documentFormatLabel">Markdown</strong>
             <button id="mdPreviewMode" class="active">预览</button>
-            <button id="mdLiveMode" title="当前块显示 Markdown 源码，其他内容保持渲染">实时预览</button>
+            <button id="mdLiveMode" title="直接在渲染内容上输入并自动同步源文件">实时预览</button>
             <button id="mdSourceMode">code</button>
             <div class="toolbar-group">
               <button id="mdZoomOut" title="缩小 Markdown">−</button>
@@ -819,7 +840,7 @@ export class MineruLayoutViewer extends HTMLElement {
           <div class="settings-row"><label for="mdOutlineSize">默认大小</label><input id="mdOutlineSize" type="range" min="15" max="70" step="1"><output id="mdOutlineSizeValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group settings-plugin">
-          <strong>默认 Markdown 渲染插件</strong>
+          <strong>默认 Markdown / Org 渲染插件</strong>
           <div id="defaultPluginName" class="settings-plugin-name"></div>
           <button id="loadTheme" title="加载本地 JavaScript 渲染/主题插件">选择插件…</button>
           <button id="restoreTheme">恢复内置</button>
@@ -985,9 +1006,16 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!shadow) return
     const matched = this.sections.filter(section => section.bbox).length
     const images = this.sections.filter(section => section.kind === 'image').length
+    const formatLabel = this.documentFormat === 'org' ? 'Org' : 'Markdown'
     shadow.getElementById('stat')!.innerHTML = this.standaloneMarkdown
-      ? `Markdown 编辑器 · ${this.sections.length} 个内容块 · ${images} 张图片`
+      ? `${formatLabel} 编辑器 · ${this.sections.length} 个内容块 · ${images} 张图片`
       : `${this.pages.length} 页 · ${this.sections.length} 行 · ${images} 张图片 · <span class="${matched ? 'ok' : 'warn'}">匹配 ${matched}</span>`
+    const documentFormatLabel = shadow.getElementById('documentFormatLabel')
+    if (documentFormatLabel) documentFormatLabel.textContent = formatLabel
+    const localSave = shadow.getElementById('saveLocalMarkdown') as HTMLButtonElement | null
+    if (localSave && localSave.textContent !== '正在保存…' && localSave.textContent !== '已保存到本地') {
+      localSave.textContent = `覆盖保存 ${formatLabel}`
+    }
     const dirty = shadow.getElementById('dirty')!
     dirty.className = `history-toggle${this.reviewEdits.length ? ' dirty' : ''}`
     dirty.textContent = this.reviewEdits.length ? `已修改 ${this.reviewEdits.length} 项 ▾` : '暂无修改'
@@ -1213,11 +1241,13 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!panel) return
     panel.innerHTML = ''
     const headings = this.sections.flatMap((section, index) => {
-      const match = section.raw.match(/^(#{1,6})\s+(.+?)\s*#*$/)
+      const match = this.documentFormat === 'org'
+        ? section.raw.match(/^(\*{1,6})\s+(.+)$/)
+        : section.raw.match(/^(#{1,6})\s+(.+?)\s*#*$/)
       return match ? [{ section, index, level: match[1].length, title: match[2] }] : []
     })
     if (!headings.length) {
-      panel.innerHTML = '<div class="outline-empty">没有 Markdown 标题</div>'
+      panel.innerHTML = `<div class="outline-empty">没有 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} 标题</div>`
       return
     }
     for (const heading of headings) {
@@ -1319,7 +1349,7 @@ export class MineruLayoutViewer extends HTMLElement {
       'remove-image-reference': '删除图片链接',
       'remove-image-and-reference': '删除链接和图片',
       'image-to-text': '图片改为文字',
-      'edit-markdown': '编辑 Markdown',
+      'edit-markdown': `编辑 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'}`,
       'replace-text': '查找替换',
     }
     this.reviewEdits.slice().reverse().forEach((edit, reverseIndex) => {
@@ -1564,17 +1594,18 @@ export class MineruLayoutViewer extends HTMLElement {
     this.imageObserver?.disconnect()
     pane.innerHTML = ''
     if (!this.markdownText?.trim()) {
-      pane.innerHTML = '<div class="empty">没有可显示的 Markdown 内容</div>'
+      pane.innerHTML = `<div class="empty">没有可显示的 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} 内容</div>`
       return
     }
 
     const preview = document.createElement('article')
-    preview.className = `md-preview${this.markdownMode === 'live' ? ' live-preview-mode' : ''}`
-    preview.innerHTML = this.previewRenderer.render(this.markdownText)
+    preview.className = `md-preview ${this.documentFormat}-preview${this.markdownMode === 'live' ? ' live-preview-mode' : ''}`
+    preview.innerHTML = this.previewRenderer.render(this.renderableDocument(this.markdownText))
     pane.appendChild(preview)
     this.previewRenderer.afterRender(preview)
     this.annotatePreviewBlocks(preview)
     this.decoratePreviewImages(preview)
+    if (this.markdownMode === 'live') this.enableLivePreviewEditing(preview)
     preview.addEventListener('click', event => this.onPreviewClick(event))
     preview.addEventListener('dblclick', event => this.onPreviewDoubleClick(event))
     this.applySearchHighlights(preview)
@@ -1589,7 +1620,7 @@ export class MineruLayoutViewer extends HTMLElement {
       const sectionIndex = this.sections.findIndex(section => section.start >= start && section.start < end)
       if (sectionIndex >= 0) element.dataset.idx = String(sectionIndex)
       element.title = this.markdownMode === 'live'
-        ? '单击原位编辑当前 Markdown 块；Ctrl+单击定位 PDF'
+        ? '直接单击文字并输入；内容会自动同步到源文件。Ctrl+单击定位 PDF'
         : '单击定位 PDF；双击在原位置编辑'
       element.tabIndex = 0
     }
@@ -1597,15 +1628,11 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private onPreviewClick(event: MouseEvent) {
     const target = event.target as HTMLElement
-    if (target.closest('button,a,input,textarea')) return
+    if (target.closest('button,input,textarea')) return
     const block = target.closest<HTMLElement>('[data-md-start-line]')
     if (!block) return
     if (this.markdownMode === 'live' && !event.ctrlKey && !event.metaKey) {
-      event.preventDefault()
-      event.stopPropagation()
-      if (!this.shadowRoot?.querySelector('.inline-editor')) {
-        this.openInlineBlockEditor(block, target.closest('img.md-asset') ? '' : undefined)
-      }
+      if (target.closest('a')) event.preventDefault()
       return
     }
     const sectionIndex = Number(block.dataset.idx)
@@ -1624,6 +1651,208 @@ export class MineruLayoutViewer extends HTMLElement {
     this.openInlineBlockEditor(block, target.closest('img.md-asset') ? '' : undefined)
   }
 
+  /** Make rendered blocks themselves editable; no textarea or save dialog is involved. */
+  private enableLivePreviewEditing(preview: HTMLElement) {
+    const editableTags = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE'])
+    for (const element of Array.from(preview.children) as HTMLElement[]) {
+      if (!editableTags.has(element.tagName)) continue
+      if (!element.hasAttribute('data-md-start-line')) {
+        const annotatedChild = element.querySelector<HTMLElement>('[data-md-start-line]')
+        if (annotatedChild) {
+          element.dataset.mdStartLine = annotatedChild.dataset.mdStartLine
+          element.dataset.mdEndLine = annotatedChild.dataset.mdEndLine
+          if (annotatedChild.dataset.idx) element.dataset.idx = annotatedChild.dataset.idx
+          element.title = annotatedChild.title
+        }
+      }
+      if (!element.hasAttribute('data-md-start-line')) continue
+      element.classList.add('live-editable')
+      element.contentEditable = 'true'
+      element.spellcheck = true
+      element.setAttribute('role', 'textbox')
+      element.setAttribute('aria-multiline', 'true')
+    }
+    for (const actions of preview.querySelectorAll<HTMLElement>('.preview-image-actions')) actions.contentEditable = 'false'
+
+    preview.addEventListener('focusin', event => {
+      const element = (event.target as Element).closest<HTMLElement>('.live-editable')
+      if (element) this.beginLiveEdit(element)
+    })
+    preview.addEventListener('input', event => {
+      const element = (event.target as Element).closest<HTMLElement>('.live-editable')
+      if (element) this.syncLiveEdit(element)
+    })
+    preview.addEventListener('focusout', event => {
+      const element = (event.target as Element).closest<HTMLElement>('.live-editable')
+      const next = event.relatedTarget as Node | null
+      if (element && (!next || !element.contains(next))) this.finishLiveEdit()
+    })
+    preview.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        ;(event.target as HTMLElement).blur()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        this.syncLiveEdit((event.target as Element).closest<HTMLElement>('.live-editable')!)
+        this.finishLiveEdit()
+        void this.saveMarkdownToFolder()
+      }
+    })
+  }
+
+  private beginLiveEdit(element: HTMLElement) {
+    if (this.markdownText == null || this.liveEditSession?.element === element) return
+    if (this.liveEditSession) this.finishLiveEdit(false)
+    const startLine = Number(element.dataset.mdStartLine)
+    const endLine = Number(element.dataset.mdEndLine)
+    const [start, end] = this.sourceRangeForLines(startLine, endLine)
+    this.liveEditSession = {
+      element,
+      start,
+      end,
+      originalEnd: end,
+      originalDocument: this.markdownText,
+      originalSections: this.sections,
+      changed: false,
+    }
+  }
+
+  private syncLiveEdit(element: HTMLElement) {
+    if (this.markdownText == null) return
+    if (this.liveEditSession?.element !== element) this.beginLiveEdit(element)
+    const session = this.liveEditSession
+    if (!session) return
+    const currentSource = this.markdownText.slice(session.start, session.end)
+    const lineEnding = currentSource.match(/\r?\n$/)?.[0] || ''
+    const replacement = this.blockElementToSource(element).replace(/\s+$/, '') + lineEnding
+    this.markdownText = this.markdownText.slice(0, session.start) + replacement + this.markdownText.slice(session.end)
+    session.end = session.start + replacement.length
+    session.changed = this.markdownText !== session.originalDocument
+    const status = this.shadowRoot?.getElementById('sourceStatus')
+    if (status) status.textContent = session.changed ? '实时同步中' : ''
+  }
+
+  private finishLiveEdit(rebuild = true) {
+    const session = this.liveEditSession
+    if (!session) return
+    this.liveEditSession = null
+    if (session.changed && this.markdownText != null) {
+      this.pushUndoAction({ type: 'restore-markdown', markdown: session.originalDocument })
+      this.reviewEdits.push({
+        type: 'edit-markdown',
+        detail: `${this.documentFormat === 'org' ? 'Org' : 'Markdown'} live visual edit`,
+        timestamp: new Date().toISOString(),
+        markdownStart: session.start,
+      })
+      this.refreshSectionsPreservingMatches(session.originalSections)
+      this.renderMarkdownOutline()
+      this.updateToolbar()
+      if (this.shadowRoot?.getElementById('findBar')?.classList.contains('open')) this.updateSearchResults()
+    }
+    const status = this.shadowRoot?.getElementById('sourceStatus')
+    if (status) status.textContent = ''
+    if (rebuild && this.markdownMode === 'live' && session.changed) this.rebuildMarkdownView()
+  }
+
+  private blockElementToSource(element: HTMLElement): string {
+    const originalBlock = this.liveEditSession
+      ? this.liveEditSession.originalDocument.slice(this.liveEditSession.start, this.liveEditSession.originalEnd).trimEnd()
+      : ''
+    const level = /^H([1-6])$/.exec(element.tagName)?.[1]
+    if (level) {
+      const orgKeyword = this.documentFormat === 'org' ? originalBlock.match(/^\s*#\+(TITLE|SUBTITLE):/i)?.[1] : null
+      if (orgKeyword) return `#+${orgKeyword.toUpperCase()}: ${this.inlineDomToSource(element)}`
+      const marker = this.documentFormat === 'org' ? '*'.repeat(Number(level)) : '#'.repeat(Number(level))
+      return `${marker} ${this.inlineDomToSource(element)}`
+    }
+    if (element.tagName === 'PRE') {
+      const code = element.querySelector('code')
+      const originalLanguage = originalBlock.match(/^\s*#\+BEGIN_SRC\s+([^\s]+)/i)?.[1]
+        || originalBlock.match(/^\s*```([^\s]*)/)?.[1]
+      const language = Array.from(code?.classList || []).find(name => name.startsWith('language-'))?.slice(9)
+        || originalLanguage || ''
+      const body = code?.textContent?.replace(/\n$/, '') || element.textContent?.replace(/\n$/, '') || ''
+      return this.documentFormat === 'org'
+        ? `#+BEGIN_SRC${language ? ` ${language}` : ''}\n${body}\n#+END_SRC`
+        : `\`\`\`${language}\n${body}\n\`\`\``
+    }
+    if (element.tagName === 'BLOCKQUOTE') {
+      const body = this.inlineDomToSource(element).split('\n').map(line => line.trim()).filter(Boolean)
+      const orgKeyword = this.documentFormat === 'org' ? originalBlock.match(/^\s*#\+(AUTHOR|DATE|EMAIL):/i)?.[1] : null
+      if (orgKeyword) {
+        const value = body.join(' ').replace(/^(?:\*|__)?(?:Author|Date|Email)：(?:\*|__)?\s*/i, '')
+        return `#+${orgKeyword.toUpperCase()}: ${value}`
+      }
+      return this.documentFormat === 'org'
+        ? `#+BEGIN_QUOTE\n${body.join('\n')}\n#+END_QUOTE`
+        : body.map(line => `> ${line}`).join('\n')
+    }
+    if (element.tagName === 'UL' || element.tagName === 'OL') return this.listDomToSource(element)
+    if (element.tagName === 'TABLE') return this.tableDomToSource(element)
+    return this.inlineDomToSource(element)
+  }
+
+  private inlineDomToSource(root: Node): string {
+    const walk = (node: Node): string => {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent || ''
+      if (!(node instanceof HTMLElement)) return ''
+      if (node.classList.contains('preview-image-actions')) return ''
+      const content = Array.from(node.childNodes).map(walk).join('')
+      const org = this.documentFormat === 'org'
+      if (node.tagName === 'BR') return '\n'
+      if (node.tagName === 'DIV' || node.tagName === 'P') return `${content}${node === root ? '' : '\n'}`
+      if (node.tagName === 'STRONG' || node.tagName === 'B') return org ? `*${content}*` : `**${content}**`
+      if (node.tagName === 'EM' || node.tagName === 'I') return org ? `/${content}/` : `*${content}*`
+      if (node.tagName === 'S' || node.tagName === 'DEL' || node.tagName === 'STRIKE') return org ? `+${content}+` : `~~${content}~~`
+      if (node.tagName === 'U') return org ? `_${content}_` : `<u>${content}</u>`
+      if (node.tagName === 'CODE' && node.parentElement?.tagName !== 'PRE') return org ? `~${content}~` : `\`${content}\``
+      if (node.tagName === 'A') {
+        const href = node.getAttribute('href') || ''
+        return org ? `[[${href}][${content || href}]]` : `[${content || href}](${href})`
+      }
+      if (node.tagName === 'IMG') {
+        const image = node as HTMLImageElement
+        const path = image.dataset.assetPath || image.getAttribute('src') || ''
+        const alt = image.alt || ''
+        return org ? `[[file:${path}]${alt ? `[${alt}]` : ''}]` : `![${alt}](${path})`
+      }
+      return content
+    }
+    return walk(root).replace(/\u00a0/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+  }
+
+  private listDomToSource(list: HTMLElement, depth = 0): string {
+    const ordered = list.tagName === 'OL'
+    const items = Array.from(list.children).filter(child => child.tagName === 'LI') as HTMLElement[]
+    const lines: string[] = []
+    items.forEach((item, index) => {
+      const clone = item.cloneNode(true) as HTMLElement
+      clone.querySelectorAll('ul,ol,.preview-image-actions').forEach(child => child.remove())
+      const checkbox = item.querySelector<HTMLInputElement>('input[type="checkbox"]')
+      clone.querySelectorAll('input[type="checkbox"]').forEach(child => child.remove())
+      const prefix = ordered ? `${index + 1}.` : '-'
+      const task = checkbox ? `[${checkbox.checked ? 'x' : ' '}] ` : ''
+      lines.push(`${'  '.repeat(depth)}${prefix} ${task}${this.inlineDomToSource(clone)}`.trimEnd())
+      for (const nested of Array.from(item.children).filter(child => child.tagName === 'UL' || child.tagName === 'OL') as HTMLElement[]) {
+        lines.push(this.listDomToSource(nested, depth + 1))
+      }
+    })
+    return lines.join('\n')
+  }
+
+  private tableDomToSource(table: HTMLElement): string {
+    const rows = Array.from(table.querySelectorAll('tr')).map(row =>
+      Array.from(row.querySelectorAll('th,td')).map(cell => this.inlineDomToSource(cell).replace(/\|/g, '\\|')))
+    if (!rows.length) return ''
+    const output = [`| ${rows[0].join(' | ')} |`]
+    output.push(this.documentFormat === 'org'
+      ? `|${rows[0].map(() => '---').join('+')}|`
+      : `| ${rows[0].map(() => '---').join(' | ')} |`)
+    for (const row of rows.slice(1)) output.push(`| ${row.join(' | ')} |`)
+    return output.join('\n')
+  }
+
   private openInlineBlockEditor(block: HTMLElement, replacementValue?: string) {
     if (this.markdownText == null) return
     const startLine = Number(block.dataset.mdStartLine)
@@ -1633,8 +1862,7 @@ export class MineruLayoutViewer extends HTMLElement {
     const lineEnding = original.match(/\r?\n$/)?.[0] || ''
     const initialValue = replacementValue ?? (lineEnding ? original.slice(0, -lineEnding.length) : original)
     const editor = document.createElement('div')
-    const typoraLive = this.markdownMode === 'live'
-    editor.className = `inline-editor${typoraLive ? ' typora-live-editor' : ''}`
+    editor.className = 'inline-editor'
     const tools = document.createElement('div')
     tools.className = 'inline-editor-tools'
     const textarea = document.createElement('textarea')
@@ -1657,7 +1885,7 @@ export class MineruLayoutViewer extends HTMLElement {
     }
     previewMode.addEventListener('click', () => setMode('preview'))
     codeMode.addEventListener('click', () => setMode('code'))
-    if (!typoraLive) tools.append(previewMode, codeMode)
+    tools.append(previewMode, codeMode)
 
     const localUndo = document.createElement('button')
     localUndo.textContent = '↶'
@@ -1670,7 +1898,7 @@ export class MineruLayoutViewer extends HTMLElement {
     tools.append(localUndo, localRedo)
 
     const heading = document.createElement('select')
-    const currentHeading = initialValue.match(/^(#{1,6})\s+/)?.[1].length || 0
+    const currentHeading = initialValue.match(this.documentFormat === 'org' ? /^(\*{1,6})\s+/ : /^(#{1,6})\s+/)?.[1].length || 0
     ;['正文', '一级标题', '二级标题', '三级标题', '四级标题', '五级标题', '六级标题']
       .forEach((label, level) => {
         const option = document.createElement('option')
@@ -1682,13 +1910,21 @@ export class MineruLayoutViewer extends HTMLElement {
     heading.addEventListener('change', () => this.applyHeadingLevel(textarea, Number(heading.value)))
     tools.appendChild(heading)
 
-    const definitions: Array<[string, string, string, string]> = [
-      ['<strong>B</strong>', '**', '**', '加粗'],
-      ['<em>I</em>', '*', '*', '斜体'],
-      ['<s>S</s>', '~~', '~~', '删除线'],
-      ['引用', '> ', '', '引用'],
-      ['链接', '[', '](https://)', '链接'],
-    ]
+    const definitions: Array<[string, string, string, string]> = this.documentFormat === 'org'
+      ? [
+          ['<strong>B</strong>', '*', '*', '加粗'],
+          ['<em>I</em>', '/', '/', '斜体'],
+          ['<s>S</s>', '+', '+', '删除线'],
+          ['引用', '#+BEGIN_QUOTE\n', '\n#+END_QUOTE', '引用'],
+          ['链接', '[[https://][', ']]', '链接'],
+        ]
+      : [
+          ['<strong>B</strong>', '**', '**', '加粗'],
+          ['<em>I</em>', '*', '*', '斜体'],
+          ['<s>S</s>', '~~', '~~', '删除线'],
+          ['引用', '> ', '', '引用'],
+          ['链接', '[', '](https://)', '链接'],
+        ]
     for (const [label, prefix, suffix, title] of definitions) {
       const button = document.createElement('button')
       button.innerHTML = label
@@ -1698,13 +1934,17 @@ export class MineruLayoutViewer extends HTMLElement {
     }
     const table = document.createElement('button')
     table.textContent = '表格'
-    table.addEventListener('click', () => this.insertEditorSnippet(textarea, '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |'))
+    table.addEventListener('click', () => this.insertEditorSnippet(textarea, this.documentFormat === 'org'
+      ? '| 列 1 | 列 2 |\n|------+------|\n| 内容 | 内容 |'
+      : '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |'))
     const code = document.createElement('button')
     code.textContent = '</>'
     code.title = '代码块'
     code.addEventListener('click', () => {
       const selected = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd) || '代码'
-      this.wrapEditorSelection(textarea, '```\n', '\n```')
+      this.wrapEditorSelection(textarea,
+        this.documentFormat === 'org' ? '#+BEGIN_SRC\n' : '```\n',
+        this.documentFormat === 'org' ? '\n#+END_SRC' : '\n```')
       if (!textarea.value.includes(selected)) textarea.setRangeText(selected)
     })
     tools.append(table, code)
@@ -1726,7 +1966,7 @@ export class MineruLayoutViewer extends HTMLElement {
       }
       this.replaceMarkdownRange(start, end, replacement, {
         type: replacementValue !== undefined ? 'image-to-text' : 'edit-markdown',
-        detail: 'inline Markdown block edit',
+        detail: `inline ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} block edit`,
         timestamp: new Date().toISOString(),
       })
     })
@@ -1743,8 +1983,9 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private applyHeadingLevel(textarea: HTMLTextAreaElement, level: number) {
     const lineEnd = textarea.value.indexOf('\n') < 0 ? textarea.value.length : textarea.value.indexOf('\n')
-    const firstLine = textarea.value.slice(0, lineEnd).replace(/^#{1,6}\s+/, '')
-    const replacement = `${level ? `${'#'.repeat(level)} ` : ''}${firstLine}`
+    const firstLine = textarea.value.slice(0, lineEnd).replace(this.documentFormat === 'org' ? /^\*{1,6}\s+/ : /^#{1,6}\s+/, '')
+    const marker = this.documentFormat === 'org' ? '*' : '#'
+    const replacement = `${level ? `${marker.repeat(level)} ` : ''}${firstLine}`
     textarea.setRangeText(replacement, 0, lineEnd, 'end')
     textarea.focus()
   }
@@ -1758,7 +1999,9 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private async renderInlinePreview(target: HTMLElement, markdown: string) {
-    target.innerHTML = this.previewRenderer.render(markdown || ' ')
+    target.classList.toggle('org-preview', this.documentFormat === 'org')
+    target.classList.toggle('markdown-preview', this.documentFormat === 'markdown')
+    target.innerHTML = this.previewRenderer.render(this.renderableDocument(markdown || ' '))
     this.previewRenderer.afterRender(target)
     for (const image of target.querySelectorAll<HTMLImageElement>('img')) {
       const source = image.getAttribute('src') || ''
@@ -1868,6 +2111,10 @@ export class MineruLayoutViewer extends HTMLElement {
     return [offsets[startLine] ?? markdown.length, offsets[endLine] ?? markdown.length]
   }
 
+  private renderableDocument(source: string): string {
+    return this.documentFormat === 'org' ? orgToMarkdown(source) : source
+  }
+
   private buildSourceEditor() {
     const pane = this.shadowRoot?.getElementById('mdPane')
     if (!pane) return
@@ -1881,13 +2128,13 @@ export class MineruLayoutViewer extends HTMLElement {
       const split = document.createElement('div')
       split.className = 'standalone-source-split'
       livePreview = document.createElement('article')
-      livePreview.className = 'standalone-live-preview md-preview'
+      livePreview.className = `standalone-live-preview md-preview ${this.documentFormat}-preview`
       const divider = document.createElement('div')
       divider.className = 'standalone-divider'
       divider.title = '拖动调整编辑与渲染区域比例'
       const swap = document.createElement('button')
       swap.type = 'button'
-      swap.title = '交换 Markdown 编辑器与渲染预览的位置'
+      swap.title = `交换 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} 编辑器与渲染预览的位置`
       swap.addEventListener('click', () => this.toggleStandaloneSourceOrder())
       divider.appendChild(swap)
       split.append(host, divider, livePreview)
@@ -1916,6 +2163,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.sourceEditor = new MarkdownSourceEditor({
       parent: host,
       document: value,
+      format: this.documentFormat,
       plugins,
       onChange: next => {
         this.sourceDraft = next
@@ -1956,6 +2204,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private switchToSourceMode() {
     if (this.markdownText == null || this.markdownMode === 'source') return
+    if (this.markdownMode === 'live') this.finishLiveEdit(false)
     this.markdownMode = 'source'
     this.sourceDraft = this.markdownText
     this.buildSourceEditor()
@@ -1968,6 +2217,7 @@ export class MineruLayoutViewer extends HTMLElement {
       return
     }
     if (this.markdownMode === 'preview') return
+    this.finishLiveEdit(false)
     this.markdownMode = 'preview'
     this.buildMarkdownPreview()
     this.updateModeToolbar()
@@ -1989,7 +2239,11 @@ export class MineruLayoutViewer extends HTMLElement {
     if (next !== previousMarkdown) {
       this.pushUndoAction({ type: 'restore-markdown', markdown: previousMarkdown })
       this.markdownText = next
-      this.reviewEdits.push({ type: 'edit-markdown', detail: 'edited full Markdown source', timestamp: new Date().toISOString() })
+      this.reviewEdits.push({
+        type: 'edit-markdown',
+        detail: `edited full ${this.documentFormat === 'org' ? 'Org' : 'Markdown'} source`,
+        timestamp: new Date().toISOString(),
+      })
       this.refreshSectionsPreservingMatches(previousSections)
     }
     this.sourceEditor?.destroy()
@@ -2088,8 +2342,25 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private updatePluginStyles() {
+    const pluginStyles = this.previewRenderer.styles()
     const style = this.shadowRoot?.getElementById('markdownPluginStyles')
-    if (style) style.textContent = this.previewRenderer.styles()
+    if (style) style.textContent = pluginStyles
+
+    // Chromium does not reliably activate @font-face rules declared inside a
+    // shadow tree. Mirror only those rules into the document so theme fonts
+    // are fetched while all visual selectors remain scoped to this component.
+    const fontFaces = pluginStyles.match(/@font-face\s*\{[^}]*\}/gi)?.join('\n') || ''
+    if (!fontFaces) {
+      this.documentPluginFontStyle?.remove()
+      this.documentPluginFontStyle = null
+      return
+    }
+    if (!this.documentPluginFontStyle) {
+      this.documentPluginFontStyle = document.createElement('style')
+      this.documentPluginFontStyle.dataset.mineruPluginFonts = ''
+      document.head.appendChild(this.documentPluginFontStyle)
+    }
+    this.documentPluginFontStyle.textContent = fontFaces
   }
 
   private onMdClick(section: MdSection, index: number, element: HTMLElement) {
@@ -2559,6 +2830,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private async saveMarkdownToFolder() {
     if ((!this.sourceDirectoryHandle && !this.sourceMarkdownFileHandle) || this.markdownText == null || !this.markdownPath) return
+    if (this.markdownMode === 'live') this.finishLiveEdit(false)
     if (this.markdownMode === 'source') this.saveSourceAndPreview()
     const markdownRelativePath = this.sourceDirectoryHandle
       ? this.relativeToSourceRoot(this.markdownPath)
@@ -2593,7 +2865,7 @@ export class MineruLayoutViewer extends HTMLElement {
     } finally {
       setTimeout(() => {
         if (!button) return
-        button.textContent = '覆盖保存 Markdown'
+        button.textContent = `覆盖保存 ${this.documentFormat === 'org' ? 'Org' : 'Markdown'}`
         button.disabled = !this.sourceDirectoryHandle && !this.sourceMarkdownFileHandle
       }, 1400)
     }
@@ -2720,6 +2992,8 @@ export class MineruLayoutViewer extends HTMLElement {
     this.sourceMarkdownFileHandle = null
     this.pendingDeletedAssets.clear()
     this.standaloneMarkdown = false
+    this.documentFormat = 'markdown'
+    this.liveEditSession = null
     this.pdfOutline = []
   }
 

@@ -11,6 +11,8 @@ const {
   matchMarkdownToPdf,
   MarkdownPreviewRenderer,
   createRichMarkdownPlugin,
+  documentFormatFromName,
+  orgToMarkdown,
 } = await import('../dist/index.mjs')
 
 test('content_list images keep paths and normalize 0..1000 bbox values', () => {
@@ -113,4 +115,38 @@ note[^1]
   assert.match(html, /task-list-item/)
   assert.match(html, /<math/)
   assert.match(html, /footnotes/)
+})
+
+test('Org conversion preserves source line mapping and renders common Org constructs', () => {
+  const org = `#+TITLE: Org 文档
+
+* 一级标题
+正文包含 *粗体*、/斜体/ 和 [[https://orgmode.org][链接]]。
+
+[[file:images/figure.png]]
+
+| 名称 | 状态 |
+|------+------|
+| Org  | 正常 |
+
+#+BEGIN_SRC javascript
+console.log('ok')
+#+END_SRC
+`
+  const markdown = orgToMarkdown(org)
+  const renderer = new MarkdownPreviewRenderer([createRichMarkdownPlugin()])
+  const sections = parseMarkdownSections(org)
+  const image = sections.find(section => section.kind === 'image')
+
+  assert.equal(documentFormatFromName('notes.org'), 'org')
+  assert.equal(org.split('\n').length, markdown.split('\n').length)
+  assert.match(markdown, /^# Org 文档/m)
+  assert.match(markdown, /^# 一级标题/m)
+  assert.match(markdown, /\*\*粗体\*\*/)
+  assert.match(markdown, /\*斜体\*/)
+  assert.equal(image?.imagePath, 'images/figure.png')
+  const html = renderer.render(markdown)
+  assert.match(html, /<table/)
+  assert.match(html, /language-javascript/)
+  assert.match(html, /<img[^>]+figure\.png/)
 })

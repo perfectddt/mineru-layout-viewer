@@ -2,6 +2,7 @@ import { basicSetup, EditorView } from 'codemirror'
 import { EditorState, type Extension } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { vim } from '@replit/codemirror-vim'
+import type { DocumentFormat } from './org-format.js'
 
 export interface MarkdownEditorPlugin {
   name: string
@@ -18,13 +19,13 @@ export class MarkdownSourceEditor {
   constructor(options: {
     parent: HTMLElement
     document: string
+    format?: DocumentFormat
     plugins?: MarkdownEditorPlugin[]
     onChange?: (value: string) => void
     onSelectionChange?: (offset: number) => void
   }) {
     const extensions: Extension[] = [
       basicSetup,
-      markdown(),
       EditorView.lineWrapping,
       EditorView.theme({
         '&': { height: '100%', fontSize: '14px' },
@@ -32,6 +33,7 @@ export class MarkdownSourceEditor {
         '.cm-content': { padding: '12px 0' },
       }),
     ]
+    if (options.format !== 'org') extensions.splice(1, 0, markdown())
     for (const plugin of options.plugins || []) extensions.push(plugin.extension)
     if (options.onChange || options.onSelectionChange) {
       extensions.push(EditorView.updateListener.of(update => {

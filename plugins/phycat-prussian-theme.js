@@ -13,13 +13,19 @@ export default {
   name: 'mineru-reading-theme',
   styles: `
 @font-face {
-  font-family:"Phycat LXGW WenKai";
-  src:url("/plugins/phycat/LXGWWenKai-Regular.ttf") format("truetype");
+  font-family:"LXGW WenKai";
+  src:local("LXGW WenKai"),
+      url("./plugins/phycat/LXGWWenKai-Regular.ttf") format("truetype"),
+      url("../plugins/phycat/LXGWWenKai-Regular.ttf") format("truetype"),
+      url("/plugins/phycat/LXGWWenKai-Regular.ttf") format("truetype");
   font-display:swap;
 }
 @font-face {
-  font-family:"Phycat Cascadia Code";
-  src:url("/plugins/phycat/Cascadia-Code-Regular.ttf") format("truetype");
+  font-family:CascadiaCode;
+  src:local("Cascadia Code"),
+      url("./plugins/phycat/Cascadia-Code-Regular.ttf") format("truetype"),
+      url("../plugins/phycat/Cascadia-Code-Regular.ttf") format("truetype"),
+      url("/plugins/phycat/Cascadia-Code-Regular.ttf") format("truetype");
   font-display:swap;
 }
 .md-preview {
@@ -35,7 +41,8 @@ export default {
   position:relative;
   z-index:0;
   isolation:isolate;
-  font-family:"Phycat LXGW WenKai",Optima,"LXGW WenKai","Microsoft YaHei","PingFang SC",Georgia,serif;
+  font-family:"LXGW WenKai",KaiTi,STKaiti,"Microsoft YaHei","PingFang SC",serif;
+  font-synthesis:none;
   font-size:calc(16px * var(--md-zoom));
   line-height:2;
   letter-spacing:.035em;
@@ -173,7 +180,7 @@ export default {
   border-radius:5px;
   color:#0f3057;
   background:#ebf5fa;
-  font-family:"Phycat Cascadia Code","Cascadia Code",Consolas,monospace;
+  font-family:CascadiaCode,"Cascadia Code",Consolas,monospace;
 }
 .md-preview pre {
   position:relative;

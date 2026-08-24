@@ -1,6 +1,8 @@
 export { parseBlocks, extractSpanText, extractImagePath, normalizeAssetPath } from './parse-blocks.js'
 export type { PdfBlock, MdSection, SectionKind } from './parse-blocks.js'
 export { parseMarkdownSections } from './parse-markdown.js'
+export { documentFormatFromName, orgToMarkdown } from './org-format.js'
+export type { DocumentFormat } from './org-format.js'
 export { matchMarkdownToPdf, matchSectionsToPdf, normalize, lcsSimilarity } from './match-markdown.js'
 export { MineruLayoutViewer } from './mineru-viewer.js'
 export { MarkdownPreviewRenderer } from './markdown-preview.js'

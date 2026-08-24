@@ -3,6 +3,7 @@ import { normalizeAssetPath } from './parse-blocks.js'
 
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)/
 const HTML_IMAGE_RE = /<(?:img|file)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/i
+const ORG_IMAGE_RE = /\[\[(?:file:)?([^\]]+\.(?:avif|bmp|gif|jpe?g|png|svg|webp)(?:[?#][^\]]*)?)\](?:\[[^\]]*\])?\]/i
 
 function imagePathFromLine(line: string): string | undefined {
   const markdownMatch = line.match(MARKDOWN_IMAGE_RE)
@@ -11,6 +12,8 @@ function imagePathFromLine(line: string): string | undefined {
 
   const htmlMatch = line.match(HTML_IMAGE_RE)
   if (htmlMatch?.[1]) return normalizeAssetPath(htmlMatch[1])
+  const orgMatch = line.match(ORG_IMAGE_RE)
+  if (orgMatch?.[1]) return normalizeAssetPath(orgMatch[1])
   return undefined
 }
 

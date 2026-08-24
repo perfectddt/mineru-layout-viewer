@@ -31,12 +31,12 @@ body { height: 100vh; font-family: system-ui, sans-serif; }
 <div id="dropZone" class="drop-zone">
   <div class="hint">
     <h3>MinerU 图片审核编辑器</h3>
-    <p>拖放 MinerU 导出 ZIP、结果文件夹或单个 Markdown 文件</p>
+    <p>拖放 MinerU 导出 ZIP、结果文件夹或单个 Markdown / Org 文件</p>
     <p>支持图片定位、替换、软删除、撤销和导出修改版 ZIP</p>
     <div class="choices">
       <button id="chooseZip" class="primary" type="button">选择 ZIP</button>
       <button id="chooseFolder" type="button">选择结果文件夹</button>
-      <button id="chooseMarkdown" type="button">选择 Markdown</button>
+      <button id="chooseMarkdown" type="button">选择 Markdown / Org</button>
     </div>
     <p id="loadStatus" class="load-status"></p>
     <p style="font-size:11px;margin-top:12px">
@@ -102,7 +102,9 @@ document.getElementById('chooseMarkdown').addEventListener('click', async e => {
       const [handle] = await window.showOpenFilePicker({
         id: 'markdown-file',
         multiple: false,
-        types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown'] } }],
+        types: [
+          { description: 'Markdown / Org', accept: { 'text/plain': ['.md', '.markdown', '.org'] } },
+        ],
       })
       const file = await handle.getFile()
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
@@ -110,11 +112,11 @@ document.getElementById('chooseMarkdown').addEventListener('click', async e => {
       return
     } catch (error) {
       if (error?.name === 'AbortError') return
-      console.warn('可写 Markdown 选择不可用，回退到只读选择', error)
+      console.warn('可写文档选择不可用，回退到只读选择', error)
     }
   }
   const input = document.createElement('input')
-  input.type = 'file'; input.accept = '.md,.markdown,text/markdown'
+  input.type = 'file'; input.accept = '.md,.markdown,.org,text/markdown,text/org,text/plain'
   input.onchange = () => handleFiles([...input.files])
   input.click()
 })
@@ -146,7 +148,7 @@ dropZone.addEventListener('drop', async e => {
       await viewer.loadDirectoryHandle(directory, writable)
       return
     }
-    const markdownHandle = handles.find(handle => handle.kind === 'file' && /\.(?:md|markdown)$/i.test(handle.name))
+    const markdownHandle = handles.find(handle => handle.kind === 'file' && /\.(?:md|markdown|org)$/i.test(handle.name))
     if (markdownHandle) {
       const file = await markdownHandle.getFile()
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
@@ -193,7 +195,7 @@ async function handleFiles(files) {
       await viewer.loadZip(zip)
       return
     }
-    const markdownFile = files.find(f => /\.(?:md|markdown)$/i.test(f.name))
+    const markdownFile = files.find(f => /\.(?:md|markdown|org)$/i.test(f.name))
     if (markdownFile && files.length === 1) {
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
       await viewer.loadMarkdownFile(markdownFile)
@@ -210,7 +212,7 @@ async function handleFiles(files) {
       if (pdfFile) viewer.setAttribute('pdf', URL.createObjectURL(pdfFile))
       return
     }
-    throw new Error('请选择 MinerU ZIP，或同时选择 PDF 与 JSON')
+    throw new Error('请选择 MinerU ZIP、单个 Markdown / Org 文件，或同时选择 PDF 与 JSON')
   } catch (error) {
     viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
     alert(error instanceof Error ? error.message : String(error))

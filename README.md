@@ -35,7 +35,8 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Resizable workspace + outlines** — arrange PDF/Markdown side-by-side or top/bottom, swap their positions, and drag the split; outlines also support side/stack layouts
 - **Persistent settings** — remember workspace ratios, outline direction/size, and a trusted default render plugin
 - **Standalone Markdown editor** — CodeMirror/live-preview panes support side or stacked layout, draggable ratios, center-line swapping, and bidirectional navigation
-- **Typora-style live preview** — a dedicated mode keeps the document rendered while the active block becomes editable Markdown source in place
+- **Typora-style live editing** — rendered headings, paragraphs, lists, tables, and code blocks are directly editable and continuously synchronized to source
+- **Standalone Org editor** — open `.org` files with the same preview/live/Code/Vim, outline, search/replace, history, zoom, layout, and local-save workflow
 - **Large PDF support** — renders PDF pages only near the viewport
 - **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
@@ -169,7 +170,7 @@ interface MdSection {
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | Load an uncompressed MinerU result folder |
 | `loadDirectoryHandle(handle): Promise<void>` | Load a folder with read/write permission |
 | `loadDirectoryEntries(entries): Promise<void>` | Load recursively collected drag/drop files and paths |
-| `loadMarkdownFile(file, handle?): Promise<void>` | Open one Markdown file in standalone editor mode |
+| `loadMarkdownFile(file, handle?): Promise<void>` | Open one Markdown or Org file in standalone editor mode |
 | `loadLayoutFromJson(data: object\|string)`| Load layout JSON directly           |
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
 | `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
@@ -249,7 +250,8 @@ MIT
 - **可拖动工作区与目录** — PDF/Markdown 支持左右或上下排列、位置交换和分隔线拖动；书签/大纲也支持左右或上下排列
 - **持久化设置** — 记住主工作区比例、目录方向/大小以及可信的默认渲染插件
 - **单 Markdown 编辑器** — `code` 模式的源码/渲染支持左右或上下排列、拖动比例、中线交换和双向定位
-- **Typora 式实时预览** — 独立“实时预览”模式保持全文渲染，单击的当前内容块在原位置显示 Markdown 源码并可编辑
+- **Typora 式实时编辑** — 独立“实时预览”模式可直接在渲染后的标题、段落、列表、表格和代码块中输入，并持续同步源文件
+- **单 Org 编辑器** — `.org` 文件同样支持预览/实时预览/Code/Vim、大纲、搜索替换、历史、缩放、布局和覆盖保存
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销/重做** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
@@ -382,7 +384,7 @@ interface MdSection {
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | 直接加载未压缩的 MinerU 结果文件夹 |
 | `loadDirectoryHandle(handle): Promise<void>` | 以可读写权限打开结果文件夹 |
 | `loadDirectoryEntries(entries): Promise<void>` | 加载目录拖放递归收集的文件和路径 |
-| `loadMarkdownFile(file, handle?): Promise<void>` | 以独立 Markdown 编辑器模式打开单文件 |
+| `loadMarkdownFile(file, handle?): Promise<void>` | 以独立 Markdown 或 Org 编辑器模式打开单文件 |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
 | `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
@@ -408,7 +410,11 @@ viewer.registerMarkdownRenderPlugin({
 
 项目还提供了根据 Typora `phycat-prussian.css` 与 `phycat/phycat.light.css` 改编的主题：
 `plugins/phycat-prussian-theme.js`。原主题的交叉斜线背景、霞鹜文楷和 Cascadia Code 字体均已保留；字体文件放在
-`plugins/phycat/`。请从项目根目录启动静态服务器，保证 `/plugins/phycat/` 字体路径可访问，然后在上述设置中加载并设为默认主题。
+`plugins/phycat/`。插件会依次尝试当前页面相对路径、上级路径和站点根路径，并在字体不可用时回退到系统楷体；修改插件后需在设置中重新选择该文件，以更新浏览器保存的插件源码。
+查看器会把插件中的 `@font-face` 单独同步到页面级样式，避免字体声明停留在 Shadow DOM 中而不触发浏览器下载。
+
+单 Org 文件还可加载 `plugins/everforest-org-theme.js`。它根据提供的 Emacs
+`everforest-hard-light-theme.el` / `everforest-hard-dark-theme.el` 配色制作，包含 Org 标题层级、TODO/DONE、表格、代码块、任务列表和实时编辑状态样式。
 
 要覆盖保存本地 `full.md`，必须通过“选择结果文件夹”打开目录并授予读写权限。
 旧式文件夹上传和 ZIP 模式只能导出修改版 ZIP，不能原位覆盖。浏览器目录写入功能
