@@ -236,6 +236,7 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .live-preview-mode pre.live-source-active .live-source-code { display:block; }
 .live-preview-mode ul.live-source-active,.live-preview-mode ol.live-source-active { padding-left:1.8em; }
 .live-preview-mode table.live-source-active td { white-space:pre-wrap; }
+.live-preview-mode .live-table-source { display:block; width:100%; min-height:7em; padding:8px; resize:vertical; border:0; outline:0; color:inherit; background:transparent; font:inherit; line-height:1.65; white-space:pre; tab-size:2; }
 .live-syntax-marker { color:#94a3b8!important; font-weight:400!important; font-style:normal!important; text-decoration:none!important; opacity:.88; }
 .live-syntax-strong { font-weight:700; color:inherit; }
 .live-syntax-em { font-style:italic; color:inherit; }
@@ -1671,8 +1672,10 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private annotatePreviewBlocks(preview: HTMLElement) {
     const displayMathRanges: Array<[number, number]> = []
+    const tableRanges: Array<[number, number]> = []
     const sourceLines = (this.markdownText || '').split(/\r?\n/)
     let mathStart = -1
+    let tableStart = -1
     sourceLines.forEach((line, index) => {
       const delimiters = (line.match(/\$\$/g) || []).length
       if (mathStart < 0 && delimiters) {
@@ -1685,11 +1688,26 @@ export class MineruLayoutViewer extends HTMLElement {
         displayMathRanges.push([mathStart, index + 1])
         mathStart = -1
       }
+      const tableLine = this.documentFormat === 'org'
+        ? /^\s*\\?\|.*\\?\|\s*$/.test(line)
+        : /^\s*\|.*\|\s*$/.test(line)
+      if (tableLine && tableStart < 0) tableStart = index
+      if (!tableLine && tableStart >= 0) {
+        tableRanges.push([tableStart, index])
+        tableStart = -1
+      }
     })
+    if (tableStart >= 0) tableRanges.push([tableStart, sourceLines.length])
     const displayMath = Array.from(preview.querySelectorAll<HTMLElement>(':scope > section'))
       .filter(element => element.querySelector('eqn') && !element.hasAttribute('data-md-start-line'))
     displayMath.forEach((element, index) => {
       const range = displayMathRanges[index]
+      if (!range) return
+      element.dataset.mdStartLine = String(range[0])
+      element.dataset.mdEndLine = String(range[1])
+    })
+    Array.from(preview.querySelectorAll<HTMLElement>(':scope > table')).forEach((element, index) => {
+      const range = tableRanges[index]
       if (!range) return
       element.dataset.mdStartLine = String(range[0])
       element.dataset.mdEndLine = String(range[1])
@@ -1815,7 +1833,7 @@ export class MineruLayoutViewer extends HTMLElement {
     const lineEnding = currentSource.match(/\r?\n$/)?.[0] || ''
     const sourceHost = element.querySelector<HTMLElement>('.live-source-code')
     const editedSource = sourceHost
-      ? (sourceHost.innerText || sourceHost.textContent || '').replace(/\r\n?/g, '\n')
+      ? ((sourceHost instanceof HTMLTextAreaElement ? sourceHost.value : sourceHost.innerText || sourceHost.textContent || '')).replace(/\r\n?/g, '\n')
       : this.blockElementToSource(element)
     const replacement = editedSource.replace(/\s+$/, '') + lineEnding
     this.markdownText = this.markdownText.slice(0, session.start) + replacement + this.markdownText.slice(session.end)
@@ -1851,7 +1869,11 @@ export class MineruLayoutViewer extends HTMLElement {
     const highlighted = this.highlightLiveSource(source)
     element.classList.add('live-source-active')
     if (element.tagName === 'TABLE') {
-      element.innerHTML = `<tbody><tr><td><span class="live-source-code">${highlighted}</span></td></tr></tbody>`
+      element.contentEditable = 'false'
+      element.innerHTML = '<tbody><tr><td><textarea class="live-source-code live-table-source" spellcheck="false" aria-label="表格源码"></textarea></td></tr></tbody>'
+      const textarea = element.querySelector<HTMLTextAreaElement>('.live-table-source')!
+      textarea.value = source
+      textarea.rows = Math.max(3, source.split('\n').length)
     } else if (element.tagName === 'UL' || element.tagName === 'OL') {
       element.innerHTML = `<li><span class="live-source-code">${highlighted}</span></li>`
     } else if (element.tagName === 'PRE') {
@@ -1862,6 +1884,11 @@ export class MineruLayoutViewer extends HTMLElement {
     const host = element.querySelector<HTMLElement>('.live-source-code')
     if (!host) return
     queueMicrotask(() => {
+      if (host instanceof HTMLTextAreaElement) {
+        host.focus()
+        host.setSelectionRange(host.value.length, host.value.length)
+        return
+      }
       const selection = document.getSelection()
       if (!selection || !host.isConnected) return
       const range = document.createRange()

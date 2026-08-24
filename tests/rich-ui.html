@@ -53,7 +53,7 @@ $$
 * 一级标题
 这是带有 *粗体*、/斜体/ 和 [[https://orgmode.org][Org 链接]] 的正文。
 
-** TODO 二级任务
+** TODO [#A] 二级任务 :工作:重要:
 - [X] 已完成
 - [ ] 待处理
 
@@ -64,6 +64,13 @@ $$
 CLOSED: [2024-01-20 Sat 13:23]
 :PROPERTIES:
 :ID:       GTD-flow-2024-01-20-13-13-42
+:STYLE:    habit
+:END:
+
+<%%(diary-chinese-anniversary 8 15)>
+
+:LOGBOOK:
+- State "DONE" from "NEXT" [2024-01-20 Sat 13:23]
 :END:
 
 | , g ~     | 设置 gtd  |                    |
@@ -90,6 +97,10 @@ console.log('everforest')
   }
   if (new URLSearchParams(location.search).has('everforest')) {
     const { default: theme } = await import('../plugins/everforest-org-theme.js')
+    viewer.registerMarkdownRenderPlugin(theme)
+  }
+  if (new URLSearchParams(location.search).has('gtd')) {
+    const { default: theme } = await import('../plugins/orglist-gtd-format.js')
     viewer.registerMarkdownRenderPlugin(theme)
   }
   folderFixture.addEventListener('change', () => viewer.loadDirectory(folderFixture.files))

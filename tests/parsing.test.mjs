@@ -14,6 +14,7 @@ const {
   documentFormatFromName,
   orgToMarkdown,
 } = await import('../dist/index.mjs')
+const { default: orglistGtdPlugin } = await import('../plugins/orglist-gtd-format.js')
 
 test('content_list images keep paths and normalize 0..1000 bbox values', () => {
   const blocks = parseBlocks(JSON.stringify([
@@ -148,9 +149,11 @@ console.log('ok')
 #+END_SRC
 
 : fixed width example
+
+<%%(diary-chinese-anniversary 8 15)>
 `
   const markdown = orgToMarkdown(org)
-  const renderer = new MarkdownPreviewRenderer([createRichMarkdownPlugin()])
+  const renderer = new MarkdownPreviewRenderer([createRichMarkdownPlugin(), orglistGtdPlugin])
   const sections = parseMarkdownSections(org)
   const image = sections.find(section => section.kind === 'image')
 
@@ -169,6 +172,7 @@ console.log('ok')
   assert.match(html, /GTD-flow-2024-01-20-13-13-42/)
   assert.match(html, /org-gtd-organize/)
   assert.match(html, /fixed width example/)
+  assert.match(html, /class="gtd-lunar-anniversary"/)
   assert.match(html, /language-javascript/)
   assert.match(html, /<img[^>]+figure\.png/)
 })

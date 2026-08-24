@@ -441,6 +441,11 @@ viewer.registerMarkdownRenderPlugin({
 单 Org 文件还可加载 `plugins/everforest-org-theme.js`。它根据提供的 Emacs
 `everforest-hard-light-theme.el` / `everforest-hard-dark-theme.el` 配色制作，包含 Org 标题层级、TODO/DONE、表格、代码块、任务列表和实时编辑状态样式。
 
+如果 Org 文件来自同级的 Orglist GTD 应用，可在设置中把
+`plugins/orglist-gtd-format.js` 选为 **Org 默认渲染插件**。TODO/NEXT/DONE/CNCL、
+优先级、尾部标签、Habit、LOGBOOK、农历周年、计划时间和常用属性的特殊显示
+全部封装在该插件中，不写入查看器核心。
+
 要覆盖保存本地 `full.md`，必须通过“选择结果文件夹”打开目录并授予读写权限。
 旧式文件夹上传和 ZIP 模式只能导出修改版 ZIP，不能原位覆盖。浏览器目录写入功能
 要求 Chromium 系浏览器的安全上下文（`localhost` 或 HTTPS）。
