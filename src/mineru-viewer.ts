@@ -57,6 +57,8 @@ type OutlineLayout = 'side' | 'stack'
 interface ViewerSettings {
   workspaceLayout: OutlineLayout
   workspaceLeftPercent: number
+  standaloneSourceLayout: OutlineLayout
+  standaloneSourceFirstPercent: number
   standaloneSourceSwapped: boolean
   pdfOutlineLayout: OutlineLayout
   pdfOutlineSize: number
@@ -69,6 +71,8 @@ const RENDER_PLUGIN_KEY = 'mineru-layout-viewer-default-render-plugin-v1'
 const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   workspaceLayout: 'side',
   workspaceLeftPercent: 50,
+  standaloneSourceLayout: 'side',
+  standaloneSourceFirstPercent: 50,
   standaloneSourceSwapped: false,
   pdfOutlineLayout: 'side',
   pdfOutlineSize: 33,
@@ -202,13 +206,25 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .inline-editor textarea { display:block; width:100%; min-height:120px; max-height:55vh; resize:vertical; border:0; outline:0; padding:10px; font:14px/1.65 'Cascadia Code',Consolas,monospace; }
 .inline-editor-preview { min-height:120px; max-height:55vh; overflow:auto; padding:10px 16px; }
 .inline-editor [hidden] { display:none!important; }
+.live-preview-mode [data-md-start-line] { cursor:text; }
+.typora-live-editor { margin:.35em 0; box-shadow:inset 3px 0 0 #2563eb,0 3px 12px rgba(37,99,235,.12); }
+.typora-live-editor textarea { min-height:76px; max-height:42vh; }
 .source-editor-host { flex:1; width:100%; height:100%; min-height:0; overflow:hidden; }
 .source-editor-host .cm-editor { height:100%; }
-.standalone-source-split { display:grid; grid-template-columns:1fr 1fr; gap:0; width:100%; height:100%; min-height:0; }
+.standalone-source-split { position:relative; display:grid; grid-template-columns:var(--standalone-first, 50%) 1fr; gap:0; width:100%; height:100%; min-height:0; overflow:hidden; }
+.standalone-source-split.stack { grid-template-columns:1fr; grid-template-rows:var(--standalone-first, 50%) 1fr; }
 .standalone-source-split .source-editor-host { border-right:1px solid #dbe3ec; }
 .standalone-source-split.swapped .source-editor-host { order:2; border-right:0; }
 .standalone-live-preview { height:100%; min-width:0; overflow:auto; padding:10px; }
 .standalone-source-split.swapped .standalone-live-preview { order:1; border-right:1px solid #dbe3ec; }
+.standalone-source-split.stack .source-editor-host { border-right:0; border-bottom:1px solid #dbe3ec; }
+.standalone-source-split.stack.swapped .source-editor-host { border-bottom:0; border-top:1px solid #dbe3ec; }
+.standalone-source-split.stack.swapped .standalone-live-preview { border-right:0; }
+.standalone-divider { position:absolute; z-index:8; left:var(--standalone-first, 50%); top:0; bottom:0; width:9px; transform:translateX(-50%); cursor:col-resize; touch-action:none; }
+.standalone-divider::after { content:''; position:absolute; top:0; bottom:0; left:4px; width:1px; background:#94a3b8; }
+.standalone-divider button { position:absolute; z-index:2; left:50%; top:50%; transform:translate(-50%,-50%); width:32px; height:30px; padding:0; border-radius:999px; box-shadow:0 2px 8px rgba(15,23,42,.18); font-size:17px; }
+.standalone-source-split.stack .standalone-divider { left:0; right:0; top:var(--standalone-first, 50%); bottom:auto; width:auto; height:9px; transform:translateY(-50%); cursor:row-resize; }
+.standalone-source-split.stack .standalone-divider::after { top:4px; bottom:auto; left:0; right:0; width:auto; height:1px; }
 .source-status { color:#2563eb; font-weight:600; }
 .settings-panel { display:none; position:absolute; z-index:50; right:10px; top:48px; width:min(350px,calc(100% - 20px)); max-height:calc(100% - 58px); overflow:auto; border:1px solid #cbd5e1; border-radius:9px; padding:12px; background:#fff; box-shadow:0 12px 34px rgba(15,23,42,.22); font-size:12px; }
 .settings-panel.open { display:block; }
@@ -267,7 +283,7 @@ export class MineruLayoutViewer extends HTMLElement {
   private previewRenderer = new MarkdownPreviewRenderer(this.markdownRenderPlugins)
   private markdownEditorPlugins: MarkdownEditorPlugin[] = []
   private sourceEditor: MarkdownSourceEditor | null = null
-  private markdownMode: 'preview' | 'source' = 'preview'
+  private markdownMode: 'preview' | 'live' | 'source' = 'preview'
   private sourceDraft = ''
   private vimEnabled = true
   private searchResults: SearchResult[] = []
@@ -283,6 +299,7 @@ export class MineruLayoutViewer extends HTMLElement {
   private progressHideTimer: ReturnType<typeof setTimeout> | null = null
   private viewerSettings: ViewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
   private activeDefaultRenderPluginName = 'mineru-reading-theme'
+  private activeDefaultRenderPluginLabel = '内置阅读主题'
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
@@ -360,7 +377,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.markdownRenderPlugins.push(plugin)
     this.previewRenderer.setPlugins(this.markdownRenderPlugins)
     this.updatePluginStyles()
-    if (this.markdownMode === 'preview') this.buildMarkdown()
+    if (this.markdownMode !== 'source') this.buildMarkdown()
   }
 
   registerMarkdownEditorPlugin(plugin: MarkdownEditorPlugin) {
@@ -378,7 +395,7 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!confirm(`加载插件会执行其中的 JavaScript，并把它设为以后默认使用的渲染插件。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
     const source = await file.text()
     const plugin = await this.importMarkdownRenderPlugin(source)
-    this.setActiveDefaultRenderPlugin(plugin)
+    this.setActiveDefaultRenderPlugin(plugin, file.name)
     let persisted = false
     try {
       localStorage.setItem(RENDER_PLUGIN_KEY, JSON.stringify({ fileName: file.name, source }))
@@ -405,11 +422,12 @@ export class MineruLayoutViewer extends HTMLElement {
     }
   }
 
-  private setActiveDefaultRenderPlugin(plugin: MarkdownRenderPlugin) {
+  private setActiveDefaultRenderPlugin(plugin: MarkdownRenderPlugin, label = plugin.name) {
     if (this.activeDefaultRenderPluginName !== plugin.name) {
       this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== this.activeDefaultRenderPluginName)
     }
     this.activeDefaultRenderPluginName = plugin.name
+    this.activeDefaultRenderPluginLabel = label
     this.registerMarkdownRenderPlugin(plugin)
   }
 
@@ -417,9 +435,9 @@ export class MineruLayoutViewer extends HTMLElement {
     try {
       const saved = localStorage.getItem(RENDER_PLUGIN_KEY)
       if (!saved) return
-      const data = JSON.parse(saved) as { source?: string }
+      const data = JSON.parse(saved) as { source?: string; fileName?: string }
       if (!data.source) return
-      this.setActiveDefaultRenderPlugin(await this.importMarkdownRenderPlugin(data.source))
+      this.setActiveDefaultRenderPlugin(await this.importMarkdownRenderPlugin(data.source), data.fileName || '自定义渲染插件')
       this.updateSettingsControls()
     } catch (error) {
       console.warn('无法恢复默认 Markdown 渲染插件', error)
@@ -428,7 +446,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private restoreBuiltinRenderPlugin() {
     try { localStorage.removeItem(RENDER_PLUGIN_KEY) } catch { /* ignored */ }
-    this.setActiveDefaultRenderPlugin(createElegantReadingTheme())
+    this.setActiveDefaultRenderPlugin(createElegantReadingTheme(), '内置阅读主题')
     this.updateSettingsControls()
   }
 
@@ -739,8 +757,8 @@ export class MineruLayoutViewer extends HTMLElement {
             <button id="toggleMdOutline" class="menu-toggle" title="显示或隐藏 Markdown 大纲">☰</button>
             <strong>Markdown</strong>
             <button id="mdPreviewMode" class="active">预览</button>
+            <button id="mdLiveMode" title="当前块显示 Markdown 源码，其他内容保持渲染">实时预览</button>
             <button id="mdSourceMode">code</button>
-            <button id="swapStandaloneSource" hidden title="交换源码编辑器与渲染预览的左右位置">⇄ 编辑/渲染</button>
             <div class="toolbar-group">
               <button id="mdZoomOut" title="缩小 Markdown">−</button>
               <span id="mdZoomValue" class="zoom-value">100%</span>
@@ -791,6 +809,11 @@ export class MineruLayoutViewer extends HTMLElement {
           <div class="settings-row"><label for="pdfOutlineSize">默认大小</label><input id="pdfOutlineSize" type="range" min="15" max="70" step="1"><output id="pdfOutlineSizeValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group">
+          <strong>单 Markdown code 工作区</strong>
+          <div class="settings-row"><label for="standaloneSourceLayout">排列</label><select id="standaloneSourceLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
+          <div class="settings-row"><label for="standaloneSourceRatio">左/上编辑区</label><input id="standaloneSourceRatio" type="range" min="20" max="80" step="1"><output id="standaloneSourceRatioValue" class="settings-value"></output></div>
+        </div>
+        <div class="settings-group">
           <strong>Markdown 大纲</strong>
           <div class="settings-row"><label for="mdOutlineLayout">排列</label><select id="mdOutlineLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
           <div class="settings-row"><label for="mdOutlineSize">默认大小</label><input id="mdOutlineSize" type="range" min="15" max="70" step="1"><output id="mdOutlineSizeValue" class="settings-value"></output></div>
@@ -836,9 +859,9 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('fitWidth')!.addEventListener('click', () => this.setPdfFitMode('width'))
     this.shadowRoot.getElementById('mdZoomOut')!.addEventListener('click', () => this.changeMarkdownZoom(-0.1))
     this.shadowRoot.getElementById('mdZoomIn')!.addEventListener('click', () => this.changeMarkdownZoom(0.1))
-    this.shadowRoot.getElementById('mdPreviewMode')!.addEventListener('click', () => this.saveSourceAndPreview())
+    this.shadowRoot.getElementById('mdPreviewMode')!.addEventListener('click', () => this.switchToPreviewMode())
+    this.shadowRoot.getElementById('mdLiveMode')!.addEventListener('click', () => this.switchToLiveMode())
     this.shadowRoot.getElementById('mdSourceMode')!.addEventListener('click', () => this.switchToSourceMode())
-    this.shadowRoot.getElementById('swapStandaloneSource')!.addEventListener('click', () => this.toggleStandaloneSourceOrder())
     this.shadowRoot.getElementById('vimToggle')!.addEventListener('click', () => this.toggleVimMode())
     this.shadowRoot.getElementById('sourceSave')!.addEventListener('click', () => this.saveSourceAndPreview())
     this.shadowRoot.getElementById('sourceCancel')!.addEventListener('click', () => this.cancelSourceMode())
@@ -1028,6 +1051,8 @@ export class MineruLayoutViewer extends HTMLElement {
       this.viewerSettings = {
         workspaceLayout: stored.workspaceLayout === 'stack' ? 'stack' : 'side',
         workspaceLeftPercent: this.clampPercent(stored.workspaceLeftPercent, DEFAULT_VIEWER_SETTINGS.workspaceLeftPercent, 20, 80),
+        standaloneSourceLayout: stored.standaloneSourceLayout === 'stack' ? 'stack' : 'side',
+        standaloneSourceFirstPercent: this.clampPercent(stored.standaloneSourceFirstPercent, DEFAULT_VIEWER_SETTINGS.standaloneSourceFirstPercent, 20, 80),
         standaloneSourceSwapped: stored.standaloneSourceSwapped === true,
         pdfOutlineLayout: stored.pdfOutlineLayout === 'stack' ? 'stack' : 'side',
         pdfOutlineSize: this.clampPercent(stored.pdfOutlineSize, DEFAULT_VIEWER_SETTINGS.pdfOutlineSize, 15, 70),
@@ -1060,12 +1085,23 @@ export class MineruLayoutViewer extends HTMLElement {
       })
     }
     listenRange('workspaceRatio', value => { this.viewerSettings.workspaceLeftPercent = value })
+    listenRange('standaloneSourceRatio', value => {
+      this.viewerSettings.standaloneSourceFirstPercent = value
+      this.updateStandaloneSourceLayout()
+    })
     listenRange('pdfOutlineSize', value => { this.viewerSettings.pdfOutlineSize = value })
     listenRange('mdOutlineSize', value => { this.viewerSettings.markdownOutlineSize = value })
     const workspaceLayout = shadow.getElementById('workspaceLayout') as HTMLSelectElement
     workspaceLayout.addEventListener('change', () => {
       this.viewerSettings.workspaceLayout = workspaceLayout.value === 'stack' ? 'stack' : 'side'
       this.updatePaneLayout()
+      this.saveViewerSettings()
+    })
+    const standaloneLayout = shadow.getElementById('standaloneSourceLayout') as HTMLSelectElement
+    standaloneLayout.addEventListener('change', () => {
+      this.viewerSettings.standaloneSourceLayout = standaloneLayout.value === 'stack' ? 'stack' : 'side'
+      this.updateStandaloneSourceLayout()
+      this.updateSettingsControls()
       this.saveViewerSettings()
     })
     const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement
@@ -1092,18 +1128,19 @@ export class MineruLayoutViewer extends HTMLElement {
       if (output) output.textContent = `${value}%`
     }
     setRange('workspaceRatio', 'workspaceRatioValue', this.viewerSettings.workspaceLeftPercent)
+    setRange('standaloneSourceRatio', 'standaloneSourceRatioValue', this.viewerSettings.standaloneSourceFirstPercent)
     setRange('pdfOutlineSize', 'pdfOutlineSizeValue', this.viewerSettings.pdfOutlineSize)
     setRange('mdOutlineSize', 'mdOutlineSizeValue', this.viewerSettings.markdownOutlineSize)
     const workspaceLayout = shadow.getElementById('workspaceLayout') as HTMLSelectElement | null
+    const standaloneLayout = shadow.getElementById('standaloneSourceLayout') as HTMLSelectElement | null
     const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement | null
     const mdLayout = shadow.getElementById('mdOutlineLayout') as HTMLSelectElement | null
     if (workspaceLayout) workspaceLayout.value = this.viewerSettings.workspaceLayout
+    if (standaloneLayout) standaloneLayout.value = this.viewerSettings.standaloneSourceLayout
     if (pdfLayout) pdfLayout.value = this.viewerSettings.pdfOutlineLayout
     if (mdLayout) mdLayout.value = this.viewerSettings.markdownOutlineLayout
     const pluginName = shadow.getElementById('defaultPluginName')
-    if (pluginName) pluginName.textContent = this.activeDefaultRenderPluginName === 'mineru-reading-theme'
-      ? '内置阅读主题'
-      : this.activeDefaultRenderPluginName
+    if (pluginName) pluginName.textContent = this.activeDefaultRenderPluginLabel
   }
 
   private updateOutlineLayout(kind: 'pdf' | 'markdown') {
@@ -1532,7 +1569,7 @@ export class MineruLayoutViewer extends HTMLElement {
     }
 
     const preview = document.createElement('article')
-    preview.className = 'md-preview'
+    preview.className = `md-preview${this.markdownMode === 'live' ? ' live-preview-mode' : ''}`
     preview.innerHTML = this.previewRenderer.render(this.markdownText)
     pane.appendChild(preview)
     this.previewRenderer.afterRender(preview)
@@ -1551,7 +1588,9 @@ export class MineruLayoutViewer extends HTMLElement {
       const [start, end] = this.sourceRangeForLines(startLine, endLine)
       const sectionIndex = this.sections.findIndex(section => section.start >= start && section.start < end)
       if (sectionIndex >= 0) element.dataset.idx = String(sectionIndex)
-      element.title = '单击定位 PDF；双击在原位置编辑'
+      element.title = this.markdownMode === 'live'
+        ? '单击原位编辑当前 Markdown 块；Ctrl+单击定位 PDF'
+        : '单击定位 PDF；双击在原位置编辑'
       element.tabIndex = 0
     }
   }
@@ -1561,12 +1600,21 @@ export class MineruLayoutViewer extends HTMLElement {
     if (target.closest('button,a,input,textarea')) return
     const block = target.closest<HTMLElement>('[data-md-start-line]')
     if (!block) return
+    if (this.markdownMode === 'live' && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (!this.shadowRoot?.querySelector('.inline-editor')) {
+        this.openInlineBlockEditor(block, target.closest('img.md-asset') ? '' : undefined)
+      }
+      return
+    }
     const sectionIndex = Number(block.dataset.idx)
     const section = this.sections[sectionIndex]
     if (section) this.onMdClick(section, sectionIndex, block)
   }
 
   private onPreviewDoubleClick(event: MouseEvent) {
+    if (this.markdownMode === 'live') return
     const target = event.target as HTMLElement
     if (target.closest('button,a,input,textarea')) return
     const block = target.closest<HTMLElement>('[data-md-start-line]')
@@ -1585,7 +1633,8 @@ export class MineruLayoutViewer extends HTMLElement {
     const lineEnding = original.match(/\r?\n$/)?.[0] || ''
     const initialValue = replacementValue ?? (lineEnding ? original.slice(0, -lineEnding.length) : original)
     const editor = document.createElement('div')
-    editor.className = 'inline-editor'
+    const typoraLive = this.markdownMode === 'live'
+    editor.className = `inline-editor${typoraLive ? ' typora-live-editor' : ''}`
     const tools = document.createElement('div')
     tools.className = 'inline-editor-tools'
     const textarea = document.createElement('textarea')
@@ -1608,7 +1657,7 @@ export class MineruLayoutViewer extends HTMLElement {
     }
     previewMode.addEventListener('click', () => setMode('preview'))
     codeMode.addEventListener('click', () => setMode('code'))
-    tools.append(previewMode, codeMode)
+    if (!typoraLive) tools.append(previewMode, codeMode)
 
     const localUndo = document.createElement('button')
     localUndo.textContent = '↶'
@@ -1830,11 +1879,21 @@ export class MineruLayoutViewer extends HTMLElement {
     let livePreview: HTMLElement | null = null
     if (this.standaloneMarkdown) {
       const split = document.createElement('div')
-      split.className = `standalone-source-split${this.viewerSettings.standaloneSourceSwapped ? ' swapped' : ''}`
+      split.className = 'standalone-source-split'
       livePreview = document.createElement('article')
       livePreview.className = 'standalone-live-preview md-preview'
-      split.append(host, livePreview)
+      const divider = document.createElement('div')
+      divider.className = 'standalone-divider'
+      divider.title = '拖动调整编辑与渲染区域比例'
+      const swap = document.createElement('button')
+      swap.type = 'button'
+      swap.title = '交换 Markdown 编辑器与渲染预览的位置'
+      swap.addEventListener('click', () => this.toggleStandaloneSourceOrder())
+      divider.appendChild(swap)
+      split.append(host, divider, livePreview)
       pane.appendChild(split)
+      this.setupStandaloneSourceDivider(split, divider)
+      this.updateStandaloneSourceLayout()
       void this.renderInlinePreview(livePreview, value).then(() => this.syncStandalonePreviewFromSource(livePreview!, 0, value))
       livePreview.addEventListener('click', event => {
         const block = (event.target as Element).closest<HTMLElement>('[data-md-start-line]')
@@ -1903,6 +1962,25 @@ export class MineruLayoutViewer extends HTMLElement {
     this.updateSearchResults()
   }
 
+  private switchToPreviewMode() {
+    if (this.markdownMode === 'source') {
+      this.saveSourceAndPreview()
+      return
+    }
+    if (this.markdownMode === 'preview') return
+    this.markdownMode = 'preview'
+    this.buildMarkdownPreview()
+    this.updateModeToolbar()
+  }
+
+  private switchToLiveMode() {
+    if (this.markdownText == null || this.markdownMode === 'live') return
+    if (this.markdownMode === 'source') this.saveSourceAndPreview()
+    this.markdownMode = 'live'
+    this.buildMarkdownPreview()
+    this.updateModeToolbar()
+  }
+
   private saveSourceAndPreview() {
     if (this.markdownMode !== 'source') return
     const next = this.sourceEditor?.getValue() ?? this.sourceDraft
@@ -1947,28 +2025,62 @@ export class MineruLayoutViewer extends HTMLElement {
   private toggleStandaloneSourceOrder() {
     if (!this.standaloneMarkdown || this.markdownMode !== 'source') return
     this.viewerSettings.standaloneSourceSwapped = !this.viewerSettings.standaloneSourceSwapped
-    this.shadowRoot?.querySelector('.standalone-source-split')
-      ?.classList.toggle('swapped', this.viewerSettings.standaloneSourceSwapped)
+    this.updateStandaloneSourceLayout()
     this.saveViewerSettings()
-    this.updateModeToolbar()
+  }
+
+  private updateStandaloneSourceLayout() {
+    const split = this.shadowRoot?.querySelector<HTMLElement>('.standalone-source-split')
+    if (!split) return
+    const stack = this.viewerSettings.standaloneSourceLayout === 'stack'
+    split.classList.toggle('stack', stack)
+    split.classList.toggle('swapped', this.viewerSettings.standaloneSourceSwapped)
+    split.style.setProperty('--standalone-first', `${this.viewerSettings.standaloneSourceFirstPercent}%`)
+    const swap = split.querySelector<HTMLButtonElement>('.standalone-divider button')
+    if (swap) {
+      swap.textContent = stack ? '⇅' : '⇄'
+      swap.title = stack
+        ? '交换 Markdown 编辑器与渲染预览的上下位置'
+        : '交换 Markdown 编辑器与渲染预览的左右位置'
+    }
+  }
+
+  private setupStandaloneSourceDivider(split: HTMLElement, divider: HTMLElement) {
+    divider.addEventListener('pointerdown', event => {
+      if ((event.target as Element).closest('button')) return
+      event.preventDefault()
+      divider.setPointerCapture(event.pointerId)
+      const move = (moveEvent: PointerEvent) => {
+        const rect = split.getBoundingClientRect()
+        const raw = this.viewerSettings.standaloneSourceLayout === 'stack'
+          ? (moveEvent.clientY - rect.top) / rect.height * 100
+          : (moveEvent.clientX - rect.left) / rect.width * 100
+        this.viewerSettings.standaloneSourceFirstPercent = this.clampPercent(raw, 50, 20, 80)
+        this.updateStandaloneSourceLayout()
+        this.updateSettingsControls()
+      }
+      const finish = () => {
+        divider.removeEventListener('pointermove', move)
+        this.saveViewerSettings()
+      }
+      divider.addEventListener('pointermove', move)
+      divider.addEventListener('pointerup', finish, { once: true })
+      divider.addEventListener('pointercancel', finish, { once: true })
+    })
   }
 
   private updateModeToolbar() {
     const shadow = this.shadowRoot
     if (!shadow) return
     shadow.getElementById('mdPreviewMode')?.classList.toggle('active', this.markdownMode === 'preview')
+    shadow.getElementById('mdLiveMode')?.classList.toggle('active', this.markdownMode === 'live')
     shadow.getElementById('mdSourceMode')?.classList.toggle('active', this.markdownMode === 'source')
-    const sourceSwap = shadow.getElementById('swapStandaloneSource') as HTMLButtonElement | null
-    if (sourceSwap) {
-      sourceSwap.hidden = !this.standaloneMarkdown || this.markdownMode !== 'source'
-      sourceSwap.textContent = this.viewerSettings.standaloneSourceSwapped ? '⇄ 渲染/编辑' : '⇄ 编辑/渲染'
-    }
     const vimButton = shadow.getElementById('vimToggle')
     if (vimButton) vimButton.textContent = `Vim：${this.vimEnabled ? '开' : '关'}`
     ;(shadow.getElementById('sourceSave') as HTMLButtonElement | null)?.toggleAttribute('hidden', this.markdownMode !== 'source')
     ;(shadow.getElementById('sourceCancel') as HTMLButtonElement | null)?.toggleAttribute('hidden', this.markdownMode !== 'source')
     const status = shadow.getElementById('sourceStatus')
-    if (status && this.markdownMode === 'preview') status.textContent = ''
+    if (status && this.markdownMode !== 'source') status.textContent = ''
     const undo = shadow.getElementById('undo') as HTMLButtonElement | null
     if (undo) undo.disabled = this.undoStack.length === 0 || this.markdownMode === 'source'
     const redo = shadow.getElementById('redo') as HTMLButtonElement | null

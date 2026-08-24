@@ -5,13 +5,23 @@
  *   %APPDATA%/Typora/themes/phycat-prussian.css
  *   %APPDATA%/Typora/themes/phycat/phycat.light.css
  *
- * This plugin is self-contained: it does not import Typora-only styles,
- * fonts, or files. Load it from Settings -> Default Markdown render plugin.
+ * Load it from Settings -> Default Markdown render plugin. The bundled font
+ * files live in /plugins/phycat/ and are copied from the supplied Typora theme.
  */
 export default {
   // Reuse the built-in theme name so this replaces it instead of stacking.
   name: 'mineru-reading-theme',
   styles: `
+@font-face {
+  font-family:"Phycat LXGW WenKai";
+  src:url("/plugins/phycat/LXGWWenKai-Regular.ttf") format("truetype");
+  font-display:swap;
+}
+@font-face {
+  font-family:"Phycat Cascadia Code";
+  src:url("/plugins/phycat/Cascadia-Code-Regular.ttf") format("truetype");
+  font-display:swap;
+}
 .md-preview {
   --phycat-blue:#1d4e89;
   --phycat-deep:#003153;
@@ -22,18 +32,29 @@ export default {
   margin:0 auto;
   padding:28px 42px 72px;
   color:#273444;
-  font-family:Optima,"LXGW WenKai","Microsoft YaHei","PingFang SC",Georgia,serif;
+  position:relative;
+  z-index:0;
+  isolation:isolate;
+  font-family:"Phycat LXGW WenKai",Optima,"LXGW WenKai","Microsoft YaHei","PingFang SC",Georgia,serif;
   font-size:calc(16px * var(--md-zoom));
   line-height:2;
   letter-spacing:.035em;
   background-color:#fff;
-  background-image:
-    linear-gradient(45deg,rgba(29,78,137,.025) 25%,transparent 25%),
-    linear-gradient(-45deg,rgba(29,78,137,.025) 25%,transparent 25%),
-    linear-gradient(45deg,transparent 75%,rgba(29,78,137,.025) 75%),
-    linear-gradient(-45deg,transparent 75%,rgba(29,78,137,.025) 75%);
-  background-position:0 0,0 15px,15px -15px,-15px 0;
-  background-size:30px 30px;
+}
+.md-preview::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:-1;
+  pointer-events:none;
+  background-color:var(--phycat-blue);
+  opacity:.12;
+  -webkit-mask-image:url("data:image/svg+xml,%3Csvg width='30' height='30' viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h30v30H0z' fill='none'/%3E%3Cpath d='M0 0L15 15M30 0L15 15M0 30L15 15M30 30L15 15' stroke='black' stroke-width='0.4'/%3E%3C/svg%3E");
+  -webkit-mask-size:20px 20px;
+  -webkit-mask-repeat:repeat;
+  mask-image:url("data:image/svg+xml,%3Csvg width='30' height='30' viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h30v30H0z' fill='none'/%3E%3Cpath d='M0 0L15 15M30 0L15 15M0 30L15 15M30 30L15 15' stroke='black' stroke-width='0.4'/%3E%3C/svg%3E");
+  mask-size:20px 20px;
+  mask-repeat:repeat;
 }
 .md-preview p { margin:.65em .6em; color:#333; word-spacing:.08em; }
 .md-preview h1,.md-preview h2,.md-preview h3,.md-preview h4,.md-preview h5,.md-preview h6 {
@@ -152,7 +173,7 @@ export default {
   border-radius:5px;
   color:#0f3057;
   background:#ebf5fa;
-  font-family:"Cascadia Code",Consolas,monospace;
+  font-family:"Phycat Cascadia Code","Cascadia Code",Consolas,monospace;
 }
 .md-preview pre {
   position:relative;
