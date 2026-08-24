@@ -31,9 +31,10 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Zip support** — drop a MinerU output `.zip` directly, auto-extracts PDF + layout + markdown
 - **Folder support** — select an uncompressed MinerU result directory directly (no ZIP required)
 - **Folder drag/drop** — recursively opens modern directory handles with a legacy WebKit fallback
-- **Progress + ETA** — shows the active load stage, percentage, and estimated remaining time when measurable
-- **Swappable panes + outlines** — swap PDF/Markdown sides; browse PDF bookmarks and Markdown headings
-- **Standalone Markdown editor** — preview-only reading mode, plus side-by-side CodeMirror and live rendered preview in `code` mode
+- **Stage-aware progress + ETA** — shows the active load stage and only estimates time for measurable byte/file/decompression stages
+- **Resizable workspace + outlines** — drag the PDF/Markdown split; open PDF bookmarks or Markdown headings beside the document (or switch them to stacked layout)
+- **Persistent settings** — remember workspace ratios, outline direction/size, and a trusted default render plugin
+- **Standalone Markdown editor** — preview-only reading mode, plus side-by-side CodeMirror and live rendered preview with bidirectional source/preview navigation in `code` mode
 - **Large PDF support** — renders PDF pages only near the viewport
 - **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
@@ -243,9 +244,10 @@ MIT
 - **框架无关** — 基于 Web Component，支持 React、Vue 或原生 HTML
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
 - **文件夹直拖** — 支持现代目录句柄，并提供旧版 WebKit 目录递归读取后备方案
-- **动态进度** — 显示载入阶段、百分比，以及在可计算阶段的预计剩余时间
-- **左右交换与目录** — PDF/Markdown 可交换位置；PDF 提供书签，Markdown 提供标题大纲
-- **单 Markdown 编辑器** — 预览模式仅保留一个阅读窗格，`code` 模式左右同时显示源码和实时渲染
+- **分阶段动态进度** — 显示载入阶段；仅在字节读取、文件计数和解压等可测阶段估算剩余时间
+- **可拖动工作区与目录** — PDF/Markdown 分隔线可拖动；PDF 书签和 Markdown 大纲默认左右排列，也可改为上下排列并拖动大小
+- **持久化设置** — 记住主工作区比例、目录方向/大小以及可信的默认渲染插件
+- **单 Markdown 编辑器** — 预览模式仅保留一个阅读窗格，`code` 模式左右同时显示源码和实时渲染，并支持源码/渲染双向定位
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销/重做** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
@@ -398,7 +400,7 @@ viewer.registerMarkdownRenderPlugin({
 
 默认富渲染已启用：经过清洗的 HTML（含 `<br>`、HTML 表格）、GFM 表格、任务列表、
 脚注和 KaTeX。想换样式时，复制 `plugins/ocean-reading-theme.js` 并只修改其中
-作用于 `.md-preview` 的 CSS，然后在右侧点击“加载渲染插件”选择该文件。插件是会在
+作用于 `.md-preview` 的 CSS，然后点击右上角“设置”按钮，在“默认 Markdown 渲染插件”中选择该文件。插件会作为默认项保存在当前浏览器中。插件是会在
 页面中执行的 JavaScript，只加载自己信任的文件；沿用 `mineru-reading-theme` 名称会
 替换内置主题，而不是叠加两份主题。
 

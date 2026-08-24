@@ -52,6 +52,26 @@ interface SearchResult {
   match: string
 }
 
+type OutlineLayout = 'side' | 'stack'
+
+interface ViewerSettings {
+  workspaceLeftPercent: number
+  pdfOutlineLayout: OutlineLayout
+  pdfOutlineSize: number
+  markdownOutlineLayout: OutlineLayout
+  markdownOutlineSize: number
+}
+
+const VIEWER_SETTINGS_KEY = 'mineru-layout-viewer-settings-v1'
+const RENDER_PLUGIN_KEY = 'mineru-layout-viewer-default-render-plugin-v1'
+const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
+  workspaceLeftPercent: 50,
+  pdfOutlineLayout: 'side',
+  pdfOutlineSize: 33,
+  markdownOutlineLayout: 'side',
+  markdownOutlineSize: 33,
+}
+
 const STYLES = `
 :host { position:relative; display:flex; flex-direction:column; height:100%; font-family:system-ui,sans-serif; color:#1f2937; background:#fff; }
 * { box-sizing:border-box; }
@@ -75,28 +95,39 @@ button { border:1px solid #d1d5db; border-radius:5px; padding:5px 9px; backgroun
 button:hover:not(:disabled) { border-color:#3b82f6; color:#1d4ed8; background:#eff6ff; }
 button:disabled { cursor:not-allowed; opacity:.45; }
 button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; background:#fef2f2; }
-.split { position:relative; flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; overflow:hidden; }
+.split { position:relative; flex:1; display:grid; grid-template-columns:var(--workspace-left, 50%) 1fr; min-height:0; overflow:hidden; }
 .split.swapped .left-column { order:2; border-right:0; border-left:1px solid #e5e7eb; }
 .split.swapped .right-column { order:1; }
 .split.markdown-only { grid-template-columns:1fr; }
 .split.markdown-only .left-column { display:none; }
-.swap-panes { position:absolute; z-index:20; left:50%; top:7px; transform:translateX(-50%); width:31px; height:28px; padding:0; border-radius:999px; box-shadow:0 2px 7px rgba(15,23,42,.14); font-size:17px; }
-.split.markdown-only .swap-panes { display:none; }
+.workspace-divider { position:absolute; z-index:19; left:var(--workspace-left, 50%); top:0; bottom:0; width:9px; transform:translateX(-50%); cursor:col-resize; touch-action:none; }
+.workspace-divider::after { content:''; position:absolute; top:42px; bottom:0; left:4px; width:1px; background:#cbd5e1; }
+.swap-panes { position:absolute; z-index:20; left:50%; top:7px; transform:translateX(-50%); width:31px; height:28px; padding:0; border-radius:999px; box-shadow:0 2px 7px rgba(15,23,42,.14); font-size:17px; cursor:pointer; }
+.split.markdown-only .workspace-divider { display:none; }
 .pane-column { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .left-column { border-right:1px solid #e5e7eb; }
 .pane-toolbar { min-height:42px; display:flex; align-items:center; gap:5px; padding:6px 9px; border-bottom:1px solid #e5e7eb; flex-shrink:0; font-size:12px; color:#6b7280; background:#fff; }
+.split:not(.swapped) .left-column .pane-toolbar,.split.swapped .right-column .pane-toolbar { padding-right:28px; }
+.split:not(.swapped) .right-column .pane-toolbar,.split.swapped .left-column .pane-toolbar { padding-left:28px; }
 .pane-toolbar .spacer { flex:1; }
 .pane-toolbar button.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
+.menu-toggle { padding:4px 7px; font-size:16px; line-height:1; }
 .history-panel { display:none; max-height:245px; overflow:auto; border-bottom:1px solid #e5e7eb; background:#fffbeb; flex-shrink:0; }
 .history-panel.open { display:block; }
 .history-empty { padding:12px; color:#92400e; font-size:12px; }
 .history-item { display:block; width:100%; text-align:left; border:0; border-bottom:1px solid #fde68a; border-radius:0; padding:8px 10px; background:transparent; }
 .history-item small { display:block; margin-top:2px; color:#78716c; }
-.outline-panel { display:none; max-height:280px; overflow:auto; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex-shrink:0; padding:5px 0; }
-.outline-panel.open { display:block; }
+.pane-body { flex:1; display:flex; min-width:0; min-height:0; overflow:hidden; --outline-size:33%; }
+.pane-body.outline-stack { flex-direction:column; }
+.outline-panel { display:none; flex:0 0 var(--outline-size); width:var(--outline-size); min-width:0; min-height:0; overflow:auto; background:#f8fafc; padding:5px 0; }
+.pane-body.outline-open .outline-panel { display:block; }
+.pane-body.outline-stack .outline-panel { width:auto; height:var(--outline-size); }
+.outline-resizer { display:none; flex:0 0 6px; width:6px; cursor:col-resize; touch-action:none; background:linear-gradient(90deg,transparent 2px,#cbd5e1 2px,#cbd5e1 3px,transparent 3px); }
+.pane-body.outline-open .outline-resizer { display:block; }
+.pane-body.outline-stack .outline-resizer { width:auto; height:6px; cursor:row-resize; background:linear-gradient(transparent 2px,#cbd5e1 2px,#cbd5e1 3px,transparent 3px); }
 .outline-item { display:block; width:100%; text-align:left; border:0; border-radius:0; padding:5px 9px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .outline-empty { padding:10px; color:#9ca3af; font-size:12px; }
-.pane { flex:1; min-height:0; overflow:auto; padding:10px; }
+.pane { flex:1; min-width:0; min-height:0; overflow:auto; padding:10px; }
 .pane-left { background:#f8fafc; }
 .pane-right { display:flex; flex-direction:column; background:#fff; --md-zoom:1; --md-image-width:100%; --md-image-height:520px; }
 .pdf-page { position:relative; margin:0 auto 12px; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
@@ -166,13 +197,23 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .standalone-source-split .source-editor-host { border-right:1px solid #dbe3ec; }
 .standalone-live-preview { height:100%; overflow:auto; padding:10px; }
 .source-status { color:#2563eb; font-weight:600; }
+.settings-panel { display:none; position:absolute; z-index:50; right:10px; top:48px; width:min(350px,calc(100% - 20px)); max-height:calc(100% - 58px); overflow:auto; border:1px solid #cbd5e1; border-radius:9px; padding:12px; background:#fff; box-shadow:0 12px 34px rgba(15,23,42,.22); font-size:12px; }
+.settings-panel.open { display:block; }
+.settings-header { display:flex; align-items:center; margin-bottom:10px; font-size:14px; }
+.settings-header .spacer { flex:1; }
+.settings-group { padding:9px 0; border-top:1px solid #e5e7eb; }
+.settings-row { display:grid; grid-template-columns:112px minmax(0,1fr) 42px; align-items:center; gap:7px; margin:7px 0; }
+.settings-row select,.settings-row input[type=range] { width:100%; min-width:0; }
+.settings-value { text-align:right; color:#475569; font-variant-numeric:tabular-nums; }
+.settings-plugin { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.settings-plugin-name { width:100%; color:#475569; word-break:break-all; }
 .empty { display:flex; align-items:center; justify-content:center; height:100%; color:#9ca3af; text-align:center; padding:30px; }
 @media (prefers-color-scheme:dark) {
   :host { color:#e5e7eb; background:#111827; }
   .toolbar,.toolbar-group,.find-bar,.find-results,.find-result-item,.pane-toolbar,.left-column,.pane-left,.history-panel { border-color:#374151; }
   .pane-left { background:#111827; }
   .pane-right,.pdf-page,button,.find-bar { background:#1f2937; color:#e5e7eb; }
-  .pane-toolbar,.md-preview,.inline-editor,.inline-editor textarea { background:#1f2937; color:#e5e7eb; }
+  .pane-toolbar,.md-preview,.inline-editor,.inline-editor textarea,.settings-panel { background:#1f2937; color:#e5e7eb; }
   .history-panel,.history-item { background:#29251b; color:#fef3c7; }
   .md-preview h1,.md-preview h2,.md-preview h3,.md-preview h4 { color:#f8fafc; border-color:#374151; }
   .md-preview blockquote,.md-preview th,.md-preview code { background:#111827; }
@@ -224,18 +265,24 @@ export class MineruLayoutViewer extends HTMLElement {
   private panesSwapped = false
   private pdfOutline: PdfOutlineItem[] = []
   private progressStartedAt = 0
+  private progressEstimateKey = ''
+  private progressEstimateStartedAt = 0
   private progressHideTimer: ReturnType<typeof setTimeout> | null = null
+  private viewerSettings: ViewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
+  private activeDefaultRenderPluginName = 'mineru-reading-theme'
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
   constructor() {
     super()
     this.attachShadow({ mode: 'open' })
+    this.loadViewerSettings()
   }
 
   connectedCallback() {
     this.render()
     this.setupResize()
+    void this.restoreDefaultRenderPlugin()
   }
 
   disconnectedCallback() {
@@ -315,8 +362,23 @@ export class MineruLayoutViewer extends HTMLElement {
   /** Load a JavaScript render/theme plugin exported as default or markdownRenderPlugin. */
   async loadMarkdownRenderPlugin(file: File) {
     if (!/\.m?js$/i.test(file.name)) throw new Error('渲染插件必须是 .js 或 .mjs 文件')
-    if (!confirm(`加载插件会执行其中的 JavaScript。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
-    const url = URL.createObjectURL(file)
+    if (!confirm(`加载插件会执行其中的 JavaScript，并把它设为以后默认使用的渲染插件。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
+    const source = await file.text()
+    const plugin = await this.importMarkdownRenderPlugin(source)
+    this.setActiveDefaultRenderPlugin(plugin)
+    let persisted = false
+    try {
+      localStorage.setItem(RENDER_PLUGIN_KEY, JSON.stringify({ fileName: file.name, source }))
+      persisted = true
+    } catch { /* localStorage may be disabled */ }
+    this.updateSettingsControls()
+    alert(persisted
+      ? `已加载并设为默认渲染插件：${plugin.name}`
+      : `已加载渲染插件：${plugin.name}\n浏览器未允许保存设置，下次打开时需要重新加载。`)
+  }
+
+  private async importMarkdownRenderPlugin(source: string): Promise<MarkdownRenderPlugin> {
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
     try {
       const module = await import(/* @vite-ignore */ url) as {
         default?: MarkdownRenderPlugin
@@ -324,19 +386,48 @@ export class MineruLayoutViewer extends HTMLElement {
       }
       const plugin = module.default || module.markdownRenderPlugin
       if (!plugin || typeof plugin.name !== 'string') throw new Error('插件需要导出带 name 的 MarkdownRenderPlugin 对象')
-      this.registerMarkdownRenderPlugin(plugin)
-      alert(`已加载渲染插件：${plugin.name}`)
+      return plugin
     } finally {
       URL.revokeObjectURL(url)
     }
+  }
+
+  private setActiveDefaultRenderPlugin(plugin: MarkdownRenderPlugin) {
+    if (this.activeDefaultRenderPluginName !== plugin.name) {
+      this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== this.activeDefaultRenderPluginName)
+    }
+    this.activeDefaultRenderPluginName = plugin.name
+    this.registerMarkdownRenderPlugin(plugin)
+  }
+
+  private async restoreDefaultRenderPlugin() {
+    try {
+      const saved = localStorage.getItem(RENDER_PLUGIN_KEY)
+      if (!saved) return
+      const data = JSON.parse(saved) as { source?: string }
+      if (!data.source) return
+      this.setActiveDefaultRenderPlugin(await this.importMarkdownRenderPlugin(data.source))
+      this.updateSettingsControls()
+    } catch (error) {
+      console.warn('无法恢复默认 Markdown 渲染插件', error)
+    }
+  }
+
+  private restoreBuiltinRenderPlugin() {
+    try { localStorage.removeItem(RENDER_PLUGIN_KEY) } catch { /* ignored */ }
+    this.setActiveDefaultRenderPlugin(createElegantReadingTheme())
+    this.updateSettingsControls()
   }
 
   /** Load one MinerU result ZIP and keep it in memory for review edits. */
   async loadZip(zipBlob: Blob) {
     this.resetReviewState()
     this.startLoadProgress('正在读取 ZIP…')
+    this.beginProgressEstimate('read-zip')
     const zipData = await this.readBlobWithProgress(zipBlob, (loaded, total) => {
-      this.setLoadProgress(total ? loaded / total * 28 : null, `正在读取 ZIP… ${this.formatBytes(loaded)}/${this.formatBytes(total)}`)
+      const ratio = total ? loaded / total : 0
+      this.setLoadProgress(total ? ratio * 28 : null, `正在读取 ZIP… ${this.formatBytes(loaded)}/${this.formatBytes(total)}`,
+        total ? { key: 'read-zip', ratio } : undefined)
     })
     this.setLoadProgress(null, '正在解析 ZIP 索引…')
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -360,6 +451,7 @@ export class MineruLayoutViewer extends HTMLElement {
   async loadDirectoryEntries(entries: Array<{ path: string; file: File }>) {
     this.resetReviewState()
     this.startLoadProgress('正在读取文件夹…')
+    this.beginProgressEstimate('read-directory')
     if (!entries.length) throw new Error('所选文件夹为空')
     this.zip = new JSZip()
     for (let index = 0; index < entries.length; index++) {
@@ -367,7 +459,8 @@ export class MineruLayoutViewer extends HTMLElement {
       const relativePath = normalizeAssetPath(path).replace(/^\/+/, '')
       if (relativePath && !relativePath.split('/').includes('..')) this.zip.file(relativePath, file)
       if (index % 10 === 0 || index === entries.length - 1) {
-        this.setLoadProgress((index + 1) / entries.length * 35, `正在读取文件夹… ${index + 1}/${entries.length}`)
+        const ratio = (index + 1) / entries.length
+        this.setLoadProgress(ratio * 35, `正在读取文件夹… ${index + 1}/${entries.length}`, { key: 'read-directory', ratio })
         await new Promise(resolve => setTimeout(resolve, 0))
       }
     }
@@ -387,10 +480,12 @@ export class MineruLayoutViewer extends HTMLElement {
     await this.collectDirectoryFiles(handle, handle.name, collected)
     if (!collected.length) throw new Error('所选文件夹为空')
     for (let index = 0; index < collected.length; index++) {
+      if (index === 0) this.beginProgressEstimate('read-directory')
       const item = collected[index]
       this.zip.file(item.path, item.file)
       if (index % 10 === 0 || index === collected.length - 1) {
-        this.setLoadProgress((index + 1) / collected.length * 35, `正在读取文件夹… ${index + 1}/${collected.length}`)
+        const ratio = (index + 1) / collected.length
+        this.setLoadProgress(ratio * 35, `正在读取文件夹… ${index + 1}/${collected.length}`, { key: 'read-directory', ratio })
         await new Promise(resolve => setTimeout(resolve, 0))
       }
     }
@@ -453,8 +548,11 @@ export class MineruLayoutViewer extends HTMLElement {
       this.pdfUrl = this.ownedPdfUrl
     } else if (pdfPath) {
       this.setLoadProgress(48, '正在解压 PDF…')
+      this.beginProgressEstimate('decompress-pdf')
       const pdfBlob = await this.zip.file(pdfPath)!.async('blob', metadata => {
-        this.setLoadProgress(48 + metadata.percent * .28, `正在解压 PDF… ${Math.round(metadata.percent)}%`)
+        const ratio = metadata.percent / 100
+        this.setLoadProgress(48 + metadata.percent * .28, `正在解压 PDF… ${Math.round(metadata.percent)}%`,
+          { key: 'decompress-pdf', ratio })
       })
       this.ownedPdfUrl = URL.createObjectURL(pdfBlob)
       this.pdfUrl = this.ownedPdfUrl
@@ -595,11 +693,15 @@ export class MineruLayoutViewer extends HTMLElement {
         <button id="undo" disabled title="撤销">↶</button>
         <button id="redo" disabled title="重做">↷</button>
         <button id="export" disabled>导出修改版 ZIP</button>
+        <button id="settings" title="布局与渲染设置">⚙</button>
       </div>
       <div class="split" id="split">
-        <button id="swapPanes" class="swap-panes" title="交换 PDF 与 Markdown 左右位置">⇄</button>
+        <div id="workspaceDivider" class="workspace-divider" title="拖动调整左右工作区比例">
+          <button id="swapPanes" class="swap-panes" title="交换 PDF 与 Markdown 左右位置">⇄</button>
+        </div>
         <section class="pane-column left-column">
           <div class="pane-toolbar">
+            <button id="togglePdfOutline" class="menu-toggle" title="显示或隐藏 PDF 书签">☰</button>
             <strong>PDF</strong>
             <button id="dirty" class="history-toggle" title="查看并跳转到修改历史">暂无修改</button>
             <div class="toolbar-group">
@@ -609,20 +711,22 @@ export class MineruLayoutViewer extends HTMLElement {
               <button id="fitPage">整页</button>
               <button id="fitWidth">页宽</button>
             </div>
-            <button id="togglePdfOutline">书签</button>
             <span class="spacer"></span>
             <div class="legend"><span><i></i>文字</span><span><i class="visual"></i>图片</span><span><i class="removed"></i>已删/未引用</span></div>
           </div>
           <div id="historyPanel" class="history-panel"></div>
-          <div id="pdfOutlinePanel" class="outline-panel"></div>
-          <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
+          <div id="pdfPaneBody" class="pane-body">
+            <div id="pdfOutlinePanel" class="outline-panel"></div>
+            <div id="pdfOutlineResizer" class="outline-resizer" title="拖动调整书签区域大小"></div>
+            <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
+          </div>
         </section>
         <section class="pane-column right-column" id="rightColumn">
           <div class="pane-toolbar">
+            <button id="toggleMdOutline" class="menu-toggle" title="显示或隐藏 Markdown 大纲">☰</button>
             <strong>Markdown</strong>
             <button id="mdPreviewMode" class="active">预览</button>
             <button id="mdSourceMode">code</button>
-            <button id="toggleMdOutline">大纲</button>
             <div class="toolbar-group">
               <button id="mdZoomOut" title="缩小 Markdown">−</button>
               <span id="mdZoomValue" class="zoom-value">100%</span>
@@ -630,8 +734,6 @@ export class MineruLayoutViewer extends HTMLElement {
             </div>
             <button id="vimToggle" title="源码模式使用 Vim 键位">Vim：开</button>
             <button id="toggleFind">查找替换</button>
-            <button id="loadTheme" title="加载本地 JavaScript 渲染/主题插件">加载渲染插件</button>
-            <input id="themeFile" class="plugin-input" type="file" accept=".js,.mjs">
             <span class="spacer"></span>
             <span id="sourceStatus" class="source-status"></span>
             <button id="saveLocalMarkdown" disabled title="仅使用目录读写方式打开时可用">覆盖保存 Markdown</button>
@@ -655,10 +757,36 @@ export class MineruLayoutViewer extends HTMLElement {
             </div>
             <div id="findResults" class="find-results"></div>
           </div>
-          <div id="mdOutlinePanel" class="outline-panel"></div>
-          <div class="pane pane-right" id="mdPane"><div class="empty">右侧将显示 Markdown 审核内容</div></div>
+          <div id="mdPaneBody" class="pane-body">
+            <div id="mdOutlinePanel" class="outline-panel"></div>
+            <div id="mdOutlineResizer" class="outline-resizer" title="拖动调整大纲区域大小"></div>
+            <div class="pane pane-right" id="mdPane"><div class="empty">右侧将显示 Markdown 审核内容</div></div>
+          </div>
         </section>
-      </div>`
+      </div>
+      <aside id="settingsPanel" class="settings-panel">
+        <div class="settings-header"><strong>设置</strong><span class="spacer"></span><button id="closeSettings" title="关闭">×</button></div>
+        <div class="settings-group">
+          <div class="settings-row"><label for="workspaceRatio">左侧工作区</label><input id="workspaceRatio" type="range" min="20" max="80" step="1"><output id="workspaceRatioValue" class="settings-value"></output></div>
+        </div>
+        <div class="settings-group">
+          <strong>PDF 书签</strong>
+          <div class="settings-row"><label for="pdfOutlineLayout">排列</label><select id="pdfOutlineLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
+          <div class="settings-row"><label for="pdfOutlineSize">默认大小</label><input id="pdfOutlineSize" type="range" min="15" max="70" step="1"><output id="pdfOutlineSizeValue" class="settings-value"></output></div>
+        </div>
+        <div class="settings-group">
+          <strong>Markdown 大纲</strong>
+          <div class="settings-row"><label for="mdOutlineLayout">排列</label><select id="mdOutlineLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
+          <div class="settings-row"><label for="mdOutlineSize">默认大小</label><input id="mdOutlineSize" type="range" min="15" max="70" step="1"><output id="mdOutlineSizeValue" class="settings-value"></output></div>
+        </div>
+        <div class="settings-group settings-plugin">
+          <strong>默认 Markdown 渲染插件</strong>
+          <div id="defaultPluginName" class="settings-plugin-name"></div>
+          <button id="loadTheme" title="加载本地 JavaScript 渲染/主题插件">选择插件…</button>
+          <button id="restoreTheme">恢复内置</button>
+          <input id="themeFile" class="plugin-input" type="file" accept=".js,.mjs">
+        </div>
+      </aside>`
 
     this.updatePluginStyles()
     this.shadowRoot.getElementById('undo')!.addEventListener('click', () => {
@@ -670,11 +798,20 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('export')!.addEventListener('click', () => {
       void this.exportEditedZip()
     })
+    this.shadowRoot.getElementById('settings')!.addEventListener('click', () => {
+      this.shadowRoot?.getElementById('settingsPanel')?.classList.toggle('open')
+    })
+    this.shadowRoot.getElementById('closeSettings')!.addEventListener('click', () => {
+      this.shadowRoot?.getElementById('settingsPanel')?.classList.remove('open')
+    })
     this.shadowRoot.getElementById('dirty')!.addEventListener('click', () => this.toggleHistoryPanel())
     this.shadowRoot.getElementById('swapPanes')!.addEventListener('click', () => {
       this.panesSwapped = !this.panesSwapped
       this.updatePaneLayout()
     })
+    this.setupWorkspaceDivider()
+    this.setupOutlineResizer('pdf')
+    this.setupOutlineResizer('markdown')
     this.shadowRoot.getElementById('togglePdfOutline')!.addEventListener('click', () => this.toggleOutline('pdf'))
     this.shadowRoot.getElementById('toggleMdOutline')!.addEventListener('click', () => this.toggleOutline('markdown'))
     this.shadowRoot.getElementById('pdfZoomOut')!.addEventListener('click', () => this.changePdfZoom(-0.1))
@@ -699,6 +836,7 @@ export class MineruLayoutViewer extends HTMLElement {
     })
     const themeFile = this.shadowRoot.getElementById('themeFile') as HTMLInputElement
     this.shadowRoot.getElementById('loadTheme')!.addEventListener('click', () => themeFile.click())
+    this.shadowRoot.getElementById('restoreTheme')!.addEventListener('click', () => this.restoreBuiltinRenderPlugin())
     themeFile.addEventListener('change', () => {
       const file = themeFile.files?.[0]
       if (file) void this.loadMarkdownRenderPlugin(file)
@@ -718,6 +856,8 @@ export class MineruLayoutViewer extends HTMLElement {
         this.toggleFindBar(true)
       }
     })
+    this.setupSettingsControls()
+    this.updatePaneLayout()
   }
 
   private setupResize() {
@@ -838,15 +978,154 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!split) return
     split.classList.toggle('swapped', this.panesSwapped && !this.standaloneMarkdown)
     split.classList.toggle('markdown-only', this.standaloneMarkdown)
+    split.style.setProperty('--workspace-left', `${this.viewerSettings.workspaceLeftPercent}%`)
+    this.updateOutlineLayout('pdf')
+    this.updateOutlineLayout('markdown')
+    this.updateSettingsControls()
   }
 
   private toggleOutline(kind: 'pdf' | 'markdown') {
-    const id = kind === 'pdf' ? 'pdfOutlinePanel' : 'mdOutlinePanel'
-    const panel = this.shadowRoot?.getElementById(id)
-    if (!panel) return
-    panel.classList.toggle('open')
+    const body = this.shadowRoot?.getElementById(kind === 'pdf' ? 'pdfPaneBody' : 'mdPaneBody')
+    if (!body) return
+    body.classList.toggle('outline-open')
     if (kind === 'pdf') this.renderPdfOutline()
     else this.renderMarkdownOutline()
+  }
+
+  private loadViewerSettings() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(VIEWER_SETTINGS_KEY) || '{}') as Partial<ViewerSettings>
+      this.viewerSettings = {
+        workspaceLeftPercent: this.clampPercent(stored.workspaceLeftPercent, DEFAULT_VIEWER_SETTINGS.workspaceLeftPercent, 20, 80),
+        pdfOutlineLayout: stored.pdfOutlineLayout === 'stack' ? 'stack' : 'side',
+        pdfOutlineSize: this.clampPercent(stored.pdfOutlineSize, DEFAULT_VIEWER_SETTINGS.pdfOutlineSize, 15, 70),
+        markdownOutlineLayout: stored.markdownOutlineLayout === 'stack' ? 'stack' : 'side',
+        markdownOutlineSize: this.clampPercent(stored.markdownOutlineSize, DEFAULT_VIEWER_SETTINGS.markdownOutlineSize, 15, 70),
+      }
+    } catch {
+      this.viewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
+    }
+  }
+
+  private saveViewerSettings() {
+    try { localStorage.setItem(VIEWER_SETTINGS_KEY, JSON.stringify(this.viewerSettings)) } catch { /* ignored */ }
+  }
+
+  private clampPercent(value: unknown, fallback: number, min: number, max: number): number {
+    const number = Number(value)
+    return Number.isFinite(number) ? Math.max(min, Math.min(max, Math.round(number))) : fallback
+  }
+
+  private setupSettingsControls() {
+    const shadow = this.shadowRoot
+    if (!shadow) return
+    const listenRange = (id: string, apply: (value: number) => void) => {
+      const input = shadow.getElementById(id) as HTMLInputElement
+      input.addEventListener('input', () => {
+        apply(Number(input.value))
+        this.updatePaneLayout()
+        this.saveViewerSettings()
+      })
+    }
+    listenRange('workspaceRatio', value => { this.viewerSettings.workspaceLeftPercent = value })
+    listenRange('pdfOutlineSize', value => { this.viewerSettings.pdfOutlineSize = value })
+    listenRange('mdOutlineSize', value => { this.viewerSettings.markdownOutlineSize = value })
+    const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement
+    pdfLayout.addEventListener('change', () => {
+      this.viewerSettings.pdfOutlineLayout = pdfLayout.value === 'stack' ? 'stack' : 'side'
+      this.updatePaneLayout()
+      this.saveViewerSettings()
+    })
+    const mdLayout = shadow.getElementById('mdOutlineLayout') as HTMLSelectElement
+    mdLayout.addEventListener('change', () => {
+      this.viewerSettings.markdownOutlineLayout = mdLayout.value === 'stack' ? 'stack' : 'side'
+      this.updatePaneLayout()
+      this.saveViewerSettings()
+    })
+  }
+
+  private updateSettingsControls() {
+    const shadow = this.shadowRoot
+    if (!shadow) return
+    const setRange = (id: string, valueId: string, value: number) => {
+      const input = shadow.getElementById(id) as HTMLInputElement | null
+      const output = shadow.getElementById(valueId)
+      if (input) input.value = String(value)
+      if (output) output.textContent = `${value}%`
+    }
+    setRange('workspaceRatio', 'workspaceRatioValue', this.viewerSettings.workspaceLeftPercent)
+    setRange('pdfOutlineSize', 'pdfOutlineSizeValue', this.viewerSettings.pdfOutlineSize)
+    setRange('mdOutlineSize', 'mdOutlineSizeValue', this.viewerSettings.markdownOutlineSize)
+    const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement | null
+    const mdLayout = shadow.getElementById('mdOutlineLayout') as HTMLSelectElement | null
+    if (pdfLayout) pdfLayout.value = this.viewerSettings.pdfOutlineLayout
+    if (mdLayout) mdLayout.value = this.viewerSettings.markdownOutlineLayout
+    const pluginName = shadow.getElementById('defaultPluginName')
+    if (pluginName) pluginName.textContent = this.activeDefaultRenderPluginName === 'mineru-reading-theme'
+      ? '内置阅读主题'
+      : this.activeDefaultRenderPluginName
+  }
+
+  private updateOutlineLayout(kind: 'pdf' | 'markdown') {
+    const body = this.shadowRoot?.getElementById(kind === 'pdf' ? 'pdfPaneBody' : 'mdPaneBody')
+    if (!body) return
+    const layout = kind === 'pdf' ? this.viewerSettings.pdfOutlineLayout : this.viewerSettings.markdownOutlineLayout
+    const size = kind === 'pdf' ? this.viewerSettings.pdfOutlineSize : this.viewerSettings.markdownOutlineSize
+    body.classList.toggle('outline-stack', layout === 'stack')
+    body.style.setProperty('--outline-size', `${size}%`)
+  }
+
+  private setupWorkspaceDivider() {
+    const divider = this.shadowRoot?.getElementById('workspaceDivider')
+    const split = this.shadowRoot?.getElementById('split')
+    if (!divider || !split) return
+    divider.addEventListener('pointerdown', event => {
+      if ((event.target as Element).closest('button') || this.standaloneMarkdown) return
+      event.preventDefault()
+      divider.setPointerCapture(event.pointerId)
+      const move = (moveEvent: PointerEvent) => {
+        const rect = split.getBoundingClientRect()
+        this.viewerSettings.workspaceLeftPercent = this.clampPercent(
+          (moveEvent.clientX - rect.left) / rect.width * 100, 50, 20, 80,
+        )
+        this.updatePaneLayout()
+      }
+      const finish = () => {
+        divider.removeEventListener('pointermove', move)
+        this.saveViewerSettings()
+      }
+      divider.addEventListener('pointermove', move)
+      divider.addEventListener('pointerup', finish, { once: true })
+      divider.addEventListener('pointercancel', finish, { once: true })
+    })
+  }
+
+  private setupOutlineResizer(kind: 'pdf' | 'markdown') {
+    const body = this.shadowRoot?.getElementById(kind === 'pdf' ? 'pdfPaneBody' : 'mdPaneBody')
+    const resizer = this.shadowRoot?.getElementById(kind === 'pdf' ? 'pdfOutlineResizer' : 'mdOutlineResizer')
+    if (!body || !resizer) return
+    resizer.addEventListener('pointerdown', event => {
+      event.preventDefault()
+      resizer.setPointerCapture(event.pointerId)
+      const move = (moveEvent: PointerEvent) => {
+        const rect = body.getBoundingClientRect()
+        const layout = kind === 'pdf' ? this.viewerSettings.pdfOutlineLayout : this.viewerSettings.markdownOutlineLayout
+        const raw = layout === 'side'
+          ? (moveEvent.clientX - rect.left) / rect.width * 100
+          : (moveEvent.clientY - rect.top) / rect.height * 100
+        const value = this.clampPercent(raw, 33, 15, 70)
+        if (kind === 'pdf') this.viewerSettings.pdfOutlineSize = value
+        else this.viewerSettings.markdownOutlineSize = value
+        this.updatePaneLayout()
+      }
+      const finish = () => {
+        resizer.removeEventListener('pointermove', move)
+        this.saveViewerSettings()
+      }
+      resizer.addEventListener('pointermove', move)
+      resizer.addEventListener('pointerup', finish, { once: true })
+      resizer.addEventListener('pointercancel', finish, { once: true })
+    })
   }
 
   private renderMarkdownOutline() {
@@ -1486,7 +1765,10 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private sourceRangeForLines(startLine: number, endLine: number): [number, number] {
-    const markdown = this.markdownText || ''
+    return this.sourceRangeForLinesIn(this.markdownText || '', startLine, endLine)
+  }
+
+  private sourceRangeForLinesIn(markdown: string, startLine: number, endLine: number): [number, number] {
     const offsets = [0]
     for (let index = 0; index < markdown.length; index++) {
       if (markdown[index] === '\n') offsets.push(index + 1)
@@ -1510,7 +1792,20 @@ export class MineruLayoutViewer extends HTMLElement {
       livePreview.className = 'standalone-live-preview md-preview'
       split.append(host, livePreview)
       pane.appendChild(split)
-      void this.renderInlinePreview(livePreview, value)
+      void this.renderInlinePreview(livePreview, value).then(() => this.syncStandalonePreviewFromSource(livePreview!, 0, value))
+      livePreview.addEventListener('click', event => {
+        const block = (event.target as Element).closest<HTMLElement>('[data-md-start-line]')
+        if (!block || !this.sourceEditor) return
+        event.preventDefault()
+        const markdown = this.sourceEditor.getValue()
+        const startLine = Number(block.dataset.mdStartLine)
+        const endLine = Number(block.dataset.mdEndLine)
+        const [start] = this.sourceRangeForLinesIn(markdown, startLine, endLine)
+        // A cursor jump works in both standard CodeMirror and Vim normal mode;
+        // selecting the whole block makes Vim enter/reshape a visual selection.
+        this.sourceEditor.goTo(start)
+        this.syncStandalonePreviewFromSource(livePreview!, start, markdown)
+      })
     } else {
       pane.appendChild(host)
     }
@@ -1524,13 +1819,37 @@ export class MineruLayoutViewer extends HTMLElement {
         this.sourceDraft = next
         const status = this.shadowRoot?.getElementById('sourceStatus')
         if (status) status.textContent = next === this.markdownText ? '' : '未保存'
-        if (livePreview) void this.renderInlinePreview(livePreview, next)
+        if (livePreview) {
+          const offset = this.sourceEditor?.view.state.selection.main.head || 0
+          void this.renderInlinePreview(livePreview, next)
+            .then(() => this.syncStandalonePreviewFromSource(livePreview!, offset, next))
+        }
+      },
+      onSelectionChange: offset => {
+        if (livePreview) queueMicrotask(() => {
+          // CodeMirror normalizes CRLF to LF, so use its current document for
+          // offset-to-line mapping instead of the original file text.
+          const current = this.sourceEditor?.getValue() ?? value.replace(/\r\n?/g, '\n')
+          this.syncStandalonePreviewFromSource(livePreview!, offset, current)
+        })
       },
     })
     this.sourceEditor.view.dom.style.fontSize = `${Math.round(14 * this.markdownZoom)}px`
     this.sourceDraft = value
     this.updateModeToolbar()
     this.sourceEditor.focus()
+  }
+
+  private syncStandalonePreviewFromSource(preview: HTMLElement, offset: number, markdown: string) {
+    const line = markdown.slice(0, Math.max(0, Math.min(offset, markdown.length))).split('\n').length - 1
+    const blocks = Array.from(preview.querySelectorAll<HTMLElement>('[data-md-start-line]'))
+    const active = blocks.find(block => {
+      const start = Number(block.dataset.mdStartLine)
+      const end = Number(block.dataset.mdEndLine)
+      return line >= start && line < Math.max(start + 1, end)
+    }) || [...blocks].reverse().find(block => Number(block.dataset.mdStartLine) <= line)
+    blocks.forEach(block => block.classList.toggle('active', block === active))
+    active?.scrollIntoView({ block: 'nearest' })
   }
 
   private switchToSourceMode() {
@@ -2239,10 +2558,17 @@ export class MineruLayoutViewer extends HTMLElement {
     if (this.progressHideTimer) clearTimeout(this.progressHideTimer)
     this.progressHideTimer = null
     this.progressStartedAt = performance.now()
+    this.progressEstimateKey = ''
+    this.progressEstimateStartedAt = this.progressStartedAt
     this.setLoadProgress(0, label)
   }
 
-  private setLoadProgress(percent: number | null, label: string) {
+  private beginProgressEstimate(key: string) {
+    this.progressEstimateKey = key
+    this.progressEstimateStartedAt = performance.now()
+  }
+
+  private setLoadProgress(percent: number | null, label: string, estimate?: { key: string; ratio: number }) {
     const container = this.shadowRoot?.getElementById('loadProgress')
     const fill = this.shadowRoot?.getElementById('loadProgressFill') as HTMLElement | null
     const text = this.shadowRoot?.getElementById('loadProgressText')
@@ -2251,13 +2577,24 @@ export class MineruLayoutViewer extends HTMLElement {
     fill.classList.toggle('indeterminate', percent == null)
     if (percent == null) {
       fill.style.width = ''
-      text.textContent = label
+      const elapsed = performance.now() - this.progressStartedAt
+      text.textContent = `${label}${elapsed >= 1000 ? ` · 已用 ${this.formatDuration(elapsed)}` : ''}`
     } else {
       const safe = Math.max(0, Math.min(100, percent))
       fill.style.width = `${safe}%`
-      const elapsed = Math.max(0, performance.now() - this.progressStartedAt)
-      const remaining = safe >= 2 && safe < 100 ? elapsed * (100 - safe) / safe : 0
-      text.textContent = `${label} · ${Math.round(safe)}%${remaining ? ` · 约剩 ${this.formatDuration(remaining)}` : ''}`
+      let remaining = 0
+      if (estimate) {
+        if (this.progressEstimateKey !== estimate.key) {
+          this.progressEstimateKey = estimate.key
+          this.progressEstimateStartedAt = performance.now()
+        }
+        const elapsed = Math.max(0, performance.now() - this.progressEstimateStartedAt)
+        const ratio = Math.max(0, Math.min(1, estimate.ratio))
+        if (ratio >= .03 && ratio < 1 && elapsed >= 500) remaining = elapsed * (1 - ratio) / ratio
+      } else {
+        this.progressEstimateKey = ''
+      }
+      text.textContent = `${label} · 总体 ${Math.round(safe)}%${remaining ? ` · 本阶段约剩 ${this.formatDuration(remaining)}` : ''}`
     }
     this.setStatus(label)
   }
