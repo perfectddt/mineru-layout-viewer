@@ -1,16 +1,25 @@
-param([switch]$NoOpen)
+param(
+  [switch]$NoOpen,
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$Paths
+)
 
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $port = 18768
 $viewerUrl = "http://127.0.0.1:$port/"
+$stateFile = Join-Path ([System.IO.Path]::GetTempPath()) 'mineru-layout-viewer-server.json'
+$serverState = $null
 
 function Test-ViewerServer {
   try {
-    $response = Invoke-WebRequest -UseBasicParsing -Uri $viewerUrl -TimeoutSec 1
-    return $response.StatusCode -eq 200 `
-      -and $response.Content -match '<mineru-layout-viewer'
+    if (-not (Test-Path -LiteralPath $stateFile)) { return $false }
+    $script:serverState = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+    if ($script:serverState.port -ne $port -or -not $script:serverState.token) { return $false }
+    $identityUrl = "$viewerUrl`__viewer/identity?token=$([uri]::EscapeDataString($script:serverState.token))"
+    $identity = Invoke-RestMethod -UseBasicParsing -Uri $identityUrl -TimeoutSec 1
+    return $identity.app -eq 'mineru-layout-viewer'
   } catch {
     return $false
   }
@@ -18,7 +27,7 @@ function Test-ViewerServer {
 
 if (-not (Test-ViewerServer)) {
   $python = Get-Command py -ErrorAction SilentlyContinue
-  $arguments = @('-m', 'http.server', $port, '--bind', '127.0.0.1', '--directory', $projectRoot)
+  $arguments = @(('"{0}"' -f (Join-Path $projectRoot 'viewer-server.py')))
 
   if ($python) {
     $arguments = @('-3') + $arguments
@@ -56,5 +65,12 @@ if (-not (Test-ViewerServer)) {
 }
 
 if (-not $NoOpen) {
-  Start-Process $viewerUrl
+  $targetUrl = $viewerUrl
+  if ($Paths -and $Paths.Count -gt 0) {
+    $targetPath = [System.IO.Path]::GetFullPath($Paths[0])
+    $openUrl = "$viewerUrl`__viewer/open?token=$([uri]::EscapeDataString($serverState.token))&path=$([uri]::EscapeDataString($targetPath))"
+    $launch = Invoke-RestMethod -UseBasicParsing -Uri $openUrl -TimeoutSec 10
+    $targetUrl = "http://127.0.0.1:$port$($launch.url)"
+  }
+  Start-Process $targetUrl
 }

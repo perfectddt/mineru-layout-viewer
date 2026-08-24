@@ -58,6 +58,59 @@ const dropZone = document.getElementById('dropZone')
 const viewer = document.getElementById('viewer')
 const loadStatus = document.getElementById('loadStatus')
 
+async function loadLauncherTarget() {
+  const params = new URLSearchParams(location.search)
+  const launch = params.get('launch')
+  const token = params.get('token')
+  if (!launch || !token) return
+  const query = `launch=${encodeURIComponent(launch)}&token=${encodeURIComponent(token)}`
+  try {
+    loadStatus.textContent = '正在读取从 Windows 打开的内容…'
+    const manifest = await fetch(`/__viewer/manifest?${query}`).then(response => {
+      if (!response.ok) throw new Error(`读取启动内容失败：HTTP ${response.status}`)
+      return response.json()
+    })
+    dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+    if (manifest.kind === 'file') {
+      const blob = await fetch(`/__viewer/file?${query}`).then(response => response.blob())
+      let currentFile = new File([blob], manifest.name, { type: blob.type })
+      if (/\.(?:md|markdown|org)$/i.test(manifest.name)) {
+        const localHandle = {
+          kind: 'file',
+          name: manifest.name,
+          getFile: async () => currentFile,
+          createWritable: async () => {
+            let pending = new Blob([])
+            return {
+              write: async data => { pending = data instanceof Blob ? data : new Blob([data]) },
+              close: async () => {
+                const response = await fetch(`/__viewer/save?${query}`, { method: 'POST', body: pending })
+                if (!response.ok) throw new Error(`覆盖保存失败：HTTP ${response.status}`)
+                currentFile = new File([pending], manifest.name, { type: blob.type, lastModified: Date.now() })
+              },
+            }
+          },
+        }
+        await viewer.loadMarkdownFile(currentFile, localHandle)
+      } else {
+        await handleFiles([currentFile])
+      }
+      return
+    }
+    const entries = []
+    for (let index = 0; index < manifest.files.length; index++) {
+      const path = manifest.files[index]
+      loadStatus.textContent = `正在读取文件夹：${index + 1}/${manifest.files.length}`
+      const blob = await fetch(`/__viewer/file?${query}&path=${encodeURIComponent(path)}`).then(response => response.blob())
+      entries.push({ path, file: new File([blob], path.split('/').pop(), { type: blob.type }) })
+    }
+    await viewer.loadDirectoryEntries(entries)
+  } catch (error) {
+    viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
+    loadStatus.textContent = error instanceof Error ? error.message : String(error)
+  }
+}
+
 document.getElementById('chooseZip').addEventListener('click', e => {
   e.stopPropagation()
   const input = document.createElement('input')
@@ -218,6 +271,8 @@ async function handleFiles(files) {
     alert(error instanceof Error ? error.message : String(error))
   }
 }
+
+loadLauncherTarget()
 
 async function handleDirectory(files) {
   if (!files || !files.length) return

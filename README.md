@@ -5,6 +5,12 @@ project root at `http://127.0.0.1:18768/` and open the viewer automatically. Avo
 through `file://`, because browser security restrictions can prevent folder
 write-back, plugin fonts, dynamic resources, or PDF workers from loading.
 
+Run `install-windows-integration.cmd` once to create the desktop shortcut with
+the application icon and add MinerU Layout Viewer to **Open with** for ZIP,
+Markdown, and Org files. You can also drop any supported file or a MinerU result
+folder onto the shortcut. Markdown and Org files opened this way support writing
+changes back to the original file.
+
 Visualize [MinerU](https://github.com/opendatalab/MinerU) `layout.json` / `middle.json` output — side-by-side PDF + Markdown with bidirectional click-to-navigate.
 
 [English](#english) | [中文](#chinese)
@@ -236,6 +242,11 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 在独立地址 `http://127.0.0.1:18768/` 启动本地服务并自动打开浏览器，不需要手动输入网址。启动器还会核对页面身份，避免误打开占用其他端口的软件。不要通过 `file://` 直接
 打开 `index.html`，否则浏览器安全限制可能导致文件夹写回、插件字体、动态资源
 或 PDF Worker 无法正常工作。
+
+首次使用可运行 `install-windows-integration.cmd`：它会创建带专用图标的桌面
+快捷方式，并把 MinerU Layout Viewer 加入 ZIP、Markdown、Org 的“打开方式”。
+也可以把这些文件或 MinerU 结果文件夹直接拖到快捷方式上。通过该方式打开的
+单个 Markdown/Org 文件支持覆盖保存回原文件。
 
 ### 演示
 
