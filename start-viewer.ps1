@@ -3,13 +3,15 @@ param([switch]$NoOpen)
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$port = 8768
+$port = 18768
 $viewerUrl = "http://127.0.0.1:$port/"
 
 function Test-ViewerServer {
   try {
     $response = Invoke-WebRequest -UseBasicParsing -Uri $viewerUrl -TimeoutSec 1
-    return $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+    return $response.StatusCode -eq 200 `
+      -and $response.Content -match '<title>mineru-layout-viewer 测试</title>' `
+      -and $response.Content -match '<mineru-layout-viewer'
   } catch {
     return $false
   }
