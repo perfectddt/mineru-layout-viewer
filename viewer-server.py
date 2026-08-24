@@ -66,10 +66,10 @@ class ViewerHandler(SimpleHTTPRequestHandler):
                 self._json({"error": "unknown-launch"}, 404)
                 return
             if target.is_file():
-                self._json({"kind": "file", "name": target.name})
+                self._json({"kind": "file", "name": target.name, "path": str(target)})
             else:
                 files = [p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()]
-                self._json({"kind": "directory", "name": target.name, "files": files})
+                self._json({"kind": "directory", "name": target.name, "path": str(target), "files": files})
             return
         if parsed.path == "/__viewer/file":
             if not self._authorized(query):

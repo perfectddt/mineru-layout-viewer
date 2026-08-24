@@ -65,7 +65,7 @@ if (-not (Test-ViewerServer)) {
 }
 
 if (-not $NoOpen) {
-  $targetUrl = $viewerUrl
+  $targetUrl = "$viewerUrl`?token=$([uri]::EscapeDataString($serverState.token))"
   if ($Paths -and $Paths.Count -gt 0) {
     $targetPath = [System.IO.Path]::GetFullPath($Paths[0])
     $openUrl = "$viewerUrl`__viewer/open?token=$([uri]::EscapeDataString($serverState.token))&path=$([uri]::EscapeDataString($targetPath))"

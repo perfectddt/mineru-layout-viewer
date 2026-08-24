@@ -83,6 +83,10 @@ const RENDER_PLUGIN_KEYS: Record<DocumentFormat, string> = {
   markdown: 'mineru-layout-viewer-default-markdown-plugin-v2',
   org: 'mineru-layout-viewer-default-org-plugin-v2',
 }
+const RENDER_PLUGIN_STACK_KEYS: Record<DocumentFormat, string> = {
+  markdown: 'mineru-layout-viewer-markdown-plugin-stack-v3',
+  org: 'mineru-layout-viewer-org-plugin-stack-v3',
+}
 const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   workspaceLayout: 'side',
   workspaceLeftPercent: 50,
@@ -271,6 +275,9 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .settings-value { text-align:right; color:#475569; font-variant-numeric:tabular-nums; }
 .settings-plugin { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .settings-plugin-name { width:100%; color:#475569; word-break:break-all; }
+.settings-plugin-item { display:flex; align-items:center; gap:6px; margin:3px 0; padding:4px 7px; border:1px solid #e2e8f0; border-radius:6px; background:#f8fafc; }
+.settings-plugin-item span { min-width:0; flex:1; }
+.settings-plugin-item button { padding:2px 6px; color:#b91c1c; }
 .empty { display:flex; align-items:center; justify-content:center; height:100%; color:#9ca3af; text-align:center; padding:30px; }
 @media (prefers-color-scheme:dark) {
   :host { color:#e5e7eb; background:#111827; }
@@ -335,10 +342,10 @@ export class MineruLayoutViewer extends HTMLElement {
   private progressEstimateStartedAt = 0
   private progressHideTimer: ReturnType<typeof setTimeout> | null = null
   private viewerSettings: ViewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
-  private activeDefaultRenderPluginName = 'mineru-reading-theme'
-  private defaultRenderPlugins: Record<DocumentFormat, { plugin: MarkdownRenderPlugin; label: string }> = {
-    markdown: { plugin: createElegantReadingTheme(), label: '内置阅读主题' },
-    org: { plugin: createElegantReadingTheme(), label: '内置阅读主题' },
+  private activeFormatPluginNames = new Set<string>(['mineru-reading-theme'])
+  private defaultRenderPlugins: Record<DocumentFormat, Array<{ plugin: MarkdownRenderPlugin; label: string; source?: string; builtin?: boolean }>> = {
+    markdown: [{ plugin: createElegantReadingTheme(), label: '内置阅读主题', builtin: true }],
+    org: [{ plugin: createElegantReadingTheme(), label: '内置阅读主题', builtin: true }],
   }
   private documentPluginFontStyle: HTMLStyleElement | null = null
 
@@ -443,18 +450,18 @@ export class MineruLayoutViewer extends HTMLElement {
   async loadMarkdownRenderPlugin(file: File, format: DocumentFormat = this.documentFormat) {
     if (!/\.m?js$/i.test(file.name)) throw new Error('渲染插件必须是 .js 或 .mjs 文件')
     const formatLabel = format === 'org' ? 'Org' : 'Markdown'
-    if (!confirm(`加载插件会执行其中的 JavaScript，并把它设为以后默认使用的 ${formatLabel} 渲染插件。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
+    if (!confirm(`加载插件会执行其中的 JavaScript，并加入以后默认使用的 ${formatLabel} 插件列表。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
     const source = await file.text()
     const plugin = await this.importMarkdownRenderPlugin(source)
-    this.setDefaultRenderPlugin(format, plugin, file.name)
+    this.setDefaultRenderPlugin(format, plugin, file.name, source)
     let persisted = false
     try {
-      localStorage.setItem(RENDER_PLUGIN_KEYS[format], JSON.stringify({ fileName: file.name, source }))
+      this.persistRenderPluginStack(format)
       persisted = true
     } catch { /* localStorage may be disabled */ }
     this.updateSettingsControls()
     alert(persisted
-      ? `已加载并设为默认 ${formatLabel} 渲染插件：${plugin.name}`
+      ? `已加入默认 ${formatLabel} 插件列表：${plugin.name}`
       : `已加载 ${formatLabel} 渲染插件：${plugin.name}\n浏览器未允许保存设置，下次打开时需要重新加载。`)
   }
 
@@ -473,31 +480,42 @@ export class MineruLayoutViewer extends HTMLElement {
     }
   }
 
-  private setDefaultRenderPlugin(format: DocumentFormat, plugin: MarkdownRenderPlugin, label = plugin.name) {
-    this.defaultRenderPlugins[format] = { plugin, label }
+  private setDefaultRenderPlugin(format: DocumentFormat, plugin: MarkdownRenderPlugin, label = plugin.name, source?: string) {
+    this.defaultRenderPlugins[format] = this.defaultRenderPlugins[format]
+      .filter(item => item.plugin.name !== plugin.name)
+    this.defaultRenderPlugins[format].push({ plugin, label, source })
     if (format === this.documentFormat) this.activateDefaultRenderPlugin(format)
     this.updateSettingsControls()
   }
 
   private activateDefaultRenderPlugin(format: DocumentFormat) {
-    const selected = this.defaultRenderPlugins[format]
-    this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== this.activeDefaultRenderPluginName)
-    this.activeDefaultRenderPluginName = selected.plugin.name
-    this.registerMarkdownRenderPlugin(selected.plugin)
+    this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => !this.activeFormatPluginNames.has(item.name))
+    this.activeFormatPluginNames = new Set(this.defaultRenderPlugins[format].map(item => item.plugin.name))
+    for (const selected of this.defaultRenderPlugins[format]) {
+      this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== selected.plugin.name)
+      this.markdownRenderPlugins.push(selected.plugin)
+    }
+    this.previewRenderer.setPlugins(this.markdownRenderPlugins)
+    this.updatePluginStyles()
+    if (this.markdownMode !== 'source') this.buildMarkdown()
   }
 
   private async restoreDefaultRenderPlugins() {
     for (const format of ['markdown', 'org'] as DocumentFormat[]) {
       try {
-        const saved = localStorage.getItem(RENDER_PLUGIN_KEYS[format])
+        const savedStack = localStorage.getItem(RENDER_PLUGIN_STACK_KEYS[format])
+        const saved = savedStack || localStorage.getItem(RENDER_PLUGIN_KEYS[format])
           || (format === 'markdown' ? localStorage.getItem(LEGACY_RENDER_PLUGIN_KEY) : null)
         if (!saved) continue
-        const data = JSON.parse(saved) as { source?: string; fileName?: string }
-        if (!data.source) continue
-        this.defaultRenderPlugins[format] = {
-          plugin: await this.importMarkdownRenderPlugin(data.source),
-          label: data.fileName || '自定义渲染插件',
+        const parsed = JSON.parse(saved) as { source?: string; fileName?: string } | Array<{ source?: string; fileName?: string }>
+        const records = Array.isArray(parsed) ? parsed : [parsed]
+        for (const data of records) {
+          if (!data.source) continue
+          const plugin = await this.importMarkdownRenderPlugin(data.source)
+          this.defaultRenderPlugins[format] = this.defaultRenderPlugins[format].filter(item => item.plugin.name !== plugin.name)
+          this.defaultRenderPlugins[format].push({ plugin, label: data.fileName || plugin.name, source: data.source })
         }
+        if (!savedStack) this.persistRenderPluginStack(format)
       } catch (error) {
         console.warn(`无法恢复默认 ${format === 'org' ? 'Org' : 'Markdown'} 渲染插件`, error)
       }
@@ -508,10 +526,30 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private restoreBuiltinRenderPlugin(format: DocumentFormat) {
     try {
+      localStorage.removeItem(RENDER_PLUGIN_STACK_KEYS[format])
       localStorage.removeItem(RENDER_PLUGIN_KEYS[format])
       if (format === 'markdown') localStorage.removeItem(LEGACY_RENDER_PLUGIN_KEY)
     } catch { /* ignored */ }
-    this.setDefaultRenderPlugin(format, createElegantReadingTheme(), '内置阅读主题')
+    this.defaultRenderPlugins[format] = [{ plugin: createElegantReadingTheme(), label: '内置阅读主题', builtin: true }]
+    if (format === this.documentFormat) this.activateDefaultRenderPlugin(format)
+    this.updateSettingsControls()
+  }
+
+  private persistRenderPluginStack(format: DocumentFormat) {
+    const records = this.defaultRenderPlugins[format]
+      .filter(item => item.source)
+      .map(item => ({ fileName: item.label, source: item.source }))
+    localStorage.setItem(RENDER_PLUGIN_STACK_KEYS[format], JSON.stringify(records))
+  }
+
+  private removeDefaultRenderPlugin(format: DocumentFormat, pluginName: string) {
+    const next = this.defaultRenderPlugins[format].filter(item => item.plugin.name !== pluginName)
+    this.defaultRenderPlugins[format] = next.length
+      ? next
+      : [{ plugin: createElegantReadingTheme(), label: '内置阅读主题', builtin: true }]
+    try { this.persistRenderPluginStack(format) } catch { /* ignored */ }
+    if (format === this.documentFormat) this.activateDefaultRenderPlugin(format)
+    this.updateSettingsControls()
   }
 
   /** Load one MinerU result ZIP and keep it in memory for review edits. */
@@ -885,18 +923,18 @@ export class MineruLayoutViewer extends HTMLElement {
           <div class="settings-row"><label for="mdOutlineSize">默认大小</label><input id="mdOutlineSize" type="range" min="15" max="70" step="1"><output id="mdOutlineSizeValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group settings-plugin">
-          <strong>Markdown 默认渲染插件</strong>
+          <strong>Markdown 默认插件列表</strong>
           <div id="markdownPluginName" class="settings-plugin-name"></div>
-          <button id="loadMarkdownTheme" title="只用于 Markdown 的本地 JavaScript 渲染/主题插件">选择插件…</button>
+          <button id="loadMarkdownTheme" title="只用于 Markdown 的本地 JavaScript 渲染/主题插件">添加插件…</button>
           <button id="restoreMarkdownTheme">恢复内置</button>
-          <input id="markdownThemeFile" class="plugin-input" type="file" accept=".js,.mjs">
+          <input id="markdownThemeFile" class="plugin-input" type="file" accept=".js,.mjs" multiple>
         </div>
         <div class="settings-group settings-plugin">
-          <strong>Org 默认渲染插件</strong>
+          <strong>Org 默认插件列表</strong>
           <div id="orgPluginName" class="settings-plugin-name"></div>
-          <button id="loadOrgTheme" title="只用于 Org 的本地 JavaScript 渲染/主题插件">选择插件…</button>
+          <button id="loadOrgTheme" title="只用于 Org 的本地 JavaScript 渲染/主题插件">添加插件…</button>
           <button id="restoreOrgTheme">恢复内置</button>
-          <input id="orgThemeFile" class="plugin-input" type="file" accept=".js,.mjs">
+          <input id="orgThemeFile" class="plugin-input" type="file" accept=".js,.mjs" multiple>
         </div>
       </aside>`
 
@@ -952,8 +990,10 @@ export class MineruLayoutViewer extends HTMLElement {
       this.shadowRoot!.getElementById(loadId)!.addEventListener('click', () => input.click())
       this.shadowRoot!.getElementById(restoreId)!.addEventListener('click', () => this.restoreBuiltinRenderPlugin(format))
       input.addEventListener('change', () => {
-        const file = input.files?.[0]
-        if (file) void this.loadMarkdownRenderPlugin(file, format)
+        const files = Array.from(input.files || [])
+        void (async () => {
+          for (const file of files) await this.loadMarkdownRenderPlugin(file, format)
+        })()
         input.value = ''
       })
     }
@@ -1225,8 +1265,27 @@ export class MineruLayoutViewer extends HTMLElement {
     if (mdLayout) mdLayout.value = this.viewerSettings.markdownOutlineLayout
     const markdownPluginName = shadow.getElementById('markdownPluginName')
     const orgPluginName = shadow.getElementById('orgPluginName')
-    if (markdownPluginName) markdownPluginName.textContent = this.defaultRenderPlugins.markdown.label
-    if (orgPluginName) orgPluginName.textContent = this.defaultRenderPlugins.org.label
+    const renderPluginList = (host: HTMLElement | null, format: DocumentFormat) => {
+      if (!host) return
+      host.innerHTML = ''
+      for (const item of this.defaultRenderPlugins[format]) {
+        const row = document.createElement('div')
+        row.className = 'settings-plugin-item'
+        const label = document.createElement('span')
+        label.textContent = `${item.label}（${item.plugin.name}）`
+        row.appendChild(label)
+        if (!item.builtin) {
+          const remove = document.createElement('button')
+          remove.type = 'button'
+          remove.textContent = '移除'
+          remove.addEventListener('click', () => this.removeDefaultRenderPlugin(format, item.plugin.name))
+          row.appendChild(remove)
+        }
+        host.appendChild(row)
+      }
+    }
+    renderPluginList(markdownPluginName, 'markdown')
+    renderPluginList(orgPluginName, 'org')
   }
 
   private updateOutlineLayout(kind: 'pdf' | 'markdown') {

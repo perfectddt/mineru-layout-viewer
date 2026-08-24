@@ -24,9 +24,25 @@ body { height: 100vh; font-family: system-ui, sans-serif; }
 .choices button.primary { background:#2563eb; color:#fff; }
 .load-status { min-height:20px; margin-top:10px; color:#2563eb; font-size:12px; }
 .hidden { display: none !important; }
+.recent-launcher { position:fixed; top:10px; right:12px; z-index:10000; }
+.recent-launcher > button { border:1px solid #cbd5e1; border-radius:7px; padding:7px 11px; background:#fff; cursor:pointer; box-shadow:0 2px 8px #0001; }
+.recent-panel { position:absolute; top:38px; right:0; width:340px; max-height:65vh; overflow:auto; padding:10px; border:1px solid #d8dee8; border-radius:9px; background:#fff; box-shadow:0 12px 35px #0003; }
+.recent-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:7px; font-size:13px; font-weight:600; }
+.recent-head button, .recent-remove { border:0; background:transparent; color:#64748b; cursor:pointer; }
+.recent-item { display:flex; gap:6px; align-items:center; border-top:1px solid #eef2f7; }
+.recent-open { flex:1; min-width:0; padding:9px 3px; border:0; background:transparent; text-align:left; cursor:pointer; }
+.recent-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#1e293b; }
+.recent-meta { display:block; margin-top:2px; color:#94a3b8; font-size:11px; }
 </style>
 </head>
 <body>
+<div class="recent-launcher">
+  <button id="recentToggle" type="button">最近打开</button>
+  <div id="recentPanel" class="recent-panel hidden">
+    <div class="recent-head"><span>最近打开</span><button id="recentClear" type="button">清空</button></div>
+    <div id="recentList"></div>
+  </div>
+</div>
 
 <div id="dropZone" class="drop-zone">
   <div class="hint">
@@ -57,6 +73,105 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 const dropZone = document.getElementById('dropZone')
 const viewer = document.getElementById('viewer')
 const loadStatus = document.getElementById('loadStatus')
+const recentPanel = document.getElementById('recentPanel')
+const recentList = document.getElementById('recentList')
+const RECENT_KEY = 'mineru-layout-viewer-recent-v1'
+const HANDLE_DB = 'mineru-layout-viewer-handles-v1'
+const launcherToken = new URLSearchParams(location.search).get('token') || ''
+
+function getRecents() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') } catch { return [] }
+}
+
+function saveRecents(items) {
+  localStorage.setItem(RECENT_KEY, JSON.stringify(items.slice(0, 12)))
+  renderRecents()
+}
+
+function openHandleDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(HANDLE_DB, 1)
+    request.onupgradeneeded = () => request.result.createObjectStore('handles')
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function storeHandle(id, handle) {
+  const db = await openHandleDb()
+  await new Promise((resolve, reject) => {
+    const request = db.transaction('handles', 'readwrite').objectStore('handles').put(handle, id)
+    request.onsuccess = resolve; request.onerror = () => reject(request.error)
+  })
+  db.close()
+}
+
+async function readHandle(id) {
+  const db = await openHandleDb()
+  const value = await new Promise((resolve, reject) => {
+    const request = db.transaction('handles').objectStore('handles').get(id)
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error)
+  })
+  db.close(); return value
+}
+
+async function rememberHandle(handle) {
+  const id = `handle:${handle.kind}:${handle.name}`
+  await storeHandle(id, handle)
+  rememberRecent({ id, source:'handle', kind:handle.kind, name:handle.name })
+}
+
+function rememberRecent(item) {
+  const items = getRecents().filter(entry => entry.id !== item.id)
+  items.unshift({ ...item, openedAt:Date.now() })
+  saveRecents(items)
+}
+
+function renderRecents() {
+  const items = getRecents()
+  recentList.replaceChildren()
+  if (!items.length) { recentList.textContent = '还没有最近打开的内容'; return }
+  for (const item of items) {
+    const row = document.createElement('div'); row.className = 'recent-item'
+    const open = document.createElement('button'); open.className = 'recent-open'; open.type = 'button'
+    const name = document.createElement('span'); name.className = 'recent-name'; name.textContent = item.name
+    const meta = document.createElement('span'); meta.className = 'recent-meta'
+    meta.textContent = `${item.kind === 'directory' ? '文件夹' : '文件'} · ${new Date(item.openedAt).toLocaleString()}`
+    open.append(name, meta); open.onclick = () => openRecent(item)
+    const remove = document.createElement('button'); remove.className = 'recent-remove'; remove.textContent = '×'; remove.title = '移除'
+    remove.onclick = () => saveRecents(getRecents().filter(entry => entry.id !== item.id))
+    row.append(open, remove); recentList.append(row)
+  }
+}
+
+async function openRecent(item) {
+  try {
+    if (item.source === 'launcher') {
+      if (!launcherToken) throw new Error('请先通过 start-viewer.cmd 快捷方式启动一次，以取得本地服务授权')
+      const response = await fetch(`/__viewer/open?token=${encodeURIComponent(launcherToken)}&path=${encodeURIComponent(item.path)}`)
+      if (!response.ok) throw new Error('原路径已不存在或无法访问')
+      location.href = (await response.json()).url
+      return
+    }
+    const handle = await readHandle(item.id)
+    if (!handle) throw new Error('浏览器中已没有该文件的访问凭据，请重新选择')
+    let permission = await handle.queryPermission?.({ mode:'readwrite' })
+    if (permission !== 'granted') permission = await handle.requestPermission?.({ mode:'readwrite' })
+    if (permission !== 'granted') throw new Error('未授予文件访问权限')
+    dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+    if (handle.kind === 'directory') await viewer.loadDirectoryHandle(handle, true)
+    else {
+      const file = await handle.getFile()
+      if (/\.(?:md|markdown|org)$/i.test(file.name)) await viewer.loadMarkdownFile(file, handle)
+      else await handleFiles([file])
+    }
+    rememberRecent(item); recentPanel.classList.add('hidden')
+  } catch (error) { alert(error instanceof Error ? error.message : String(error)) }
+}
+
+document.getElementById('recentToggle').onclick = () => recentPanel.classList.toggle('hidden')
+document.getElementById('recentClear').onclick = () => saveRecents([])
+renderRecents()
 
 async function loadLauncherTarget() {
   const params = new URLSearchParams(location.search)
@@ -70,6 +185,7 @@ async function loadLauncherTarget() {
       if (!response.ok) throw new Error(`读取启动内容失败：HTTP ${response.status}`)
       return response.json()
     })
+    rememberRecent({ id:`launcher:${manifest.path}`, source:'launcher', kind:manifest.kind, name:manifest.name, path:manifest.path })
     dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
     if (manifest.kind === 'file') {
       const blob = await fetch(`/__viewer/file?${query}`).then(response => response.blob())
@@ -134,6 +250,7 @@ document.getElementById('chooseFolder').addEventListener('click', async e => {
         loadStatus.textContent = `正在读取可写文件夹：${handle.name}`
         dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
         await viewer.loadDirectoryHandle(handle)
+        await rememberHandle(handle)
         return
       } catch (error) {
         viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
@@ -162,6 +279,7 @@ document.getElementById('chooseMarkdown').addEventListener('click', async e => {
       const file = await handle.getFile()
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
       await viewer.loadMarkdownFile(file, handle)
+      await rememberHandle(handle)
       return
     } catch (error) {
       if (error?.name === 'AbortError') return
@@ -199,6 +317,7 @@ dropZone.addEventListener('drop', async e => {
         : false
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
       await viewer.loadDirectoryHandle(directory, writable)
+      await rememberHandle(directory)
       return
     }
     const markdownHandle = handles.find(handle => handle.kind === 'file' && /\.(?:md|markdown|org)$/i.test(handle.name))
@@ -206,6 +325,7 @@ dropZone.addEventListener('drop', async e => {
       const file = await markdownHandle.getFile()
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
       await viewer.loadMarkdownFile(file, markdownHandle)
+      await rememberHandle(markdownHandle)
       return
     }
     const legacyDirectory = [...e.dataTransfer.items]

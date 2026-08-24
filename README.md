@@ -272,7 +272,8 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 - **文件夹直拖** — 支持现代目录句柄，并提供旧版 WebKit 目录递归读取后备方案
 - **分阶段动态进度** — 显示载入阶段；仅在字节读取、文件计数和解压等可测阶段估算剩余时间
 - **可拖动工作区与目录** — PDF/Markdown 支持左右或上下排列、位置交换和分隔线拖动；书签/大纲也支持左右或上下排列
-- **持久化设置** — 记住主工作区比例、目录方向/大小以及可信的默认渲染插件
+- **持久化设置** — 记住主工作区比例、目录方向/大小以及 Markdown、Org 各自的渲染插件列表
+- **最近打开** — 记录最近使用的本地文件、文件夹和 Windows 启动路径，可从页面右上角快速重新打开
 - **单 Markdown 编辑器** — `code` 模式的源码/渲染支持左右或上下排列、拖动比例、中线交换和双向定位
 - **Typora 式混合编辑** — 聚焦当前块时显示真实 Markdown/Org 标记并进行语法着色，同时保留粗体、斜体、标题和公式源码的语义样式
 - **单 Org 编辑器** — `.org` 文件同样支持预览/实时预览/Code/Vim、大纲、搜索替换、历史、缩放、布局和覆盖保存
@@ -417,7 +418,7 @@ interface MdSection {
 | `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
 | `registerMarkdownRenderPlugin(plugin)`   | 注册 Markdown-it 规则、预览样式或渲染后钩子 |
 | `registerMarkdownEditorPlugin(plugin)`   | 注册 CodeMirror 6 编辑扩展   |
-| `loadMarkdownRenderPlugin(file, format?)` | 为 `markdown` 或 `org` 加载可信的本地 `.js`/`.mjs` 渲染插件 |
+| `loadMarkdownRenderPlugin(file, format?)` | 为 `markdown` 或 `org` 追加可信的本地 `.js`/`.mjs` 渲染插件；同名插件会更新替换 |
 
 ```js
 viewer.registerMarkdownRenderPlugin({
@@ -429,7 +430,7 @@ viewer.registerMarkdownRenderPlugin({
 
 默认富渲染已启用：经过清洗的 HTML（含 `<br>`、HTML 表格）、GFM 表格、任务列表、
 脚注和 KaTeX。想换样式时，复制 `plugins/ocean-reading-theme.js` 并只修改其中
-作用于 `.md-preview` 的 CSS，然后点击右上角“设置”按钮。Markdown 与 Org 各有独立的默认插件选择和本地保存项，切换文件格式时只启用对应插件，因此字体、颜色和背景不会互相覆盖。插件会在
+作用于 `.md-preview` 的 CSS，然后点击右上角“设置”按钮。Markdown 与 Org 各有独立的插件列表和本地保存项，同一格式可同时加载多个插件；插件按列表顺序执行，后面的插件可覆盖前面的冲突配置。切换文件格式时只启用对应列表，因此 Markdown 与 Org 的字体、颜色和背景不会互相覆盖。插件会在
 页面中执行 JavaScript，只加载自己信任的文件；沿用 `mineru-reading-theme` 名称会
 替换对应格式的内置主题，而不是叠加两份主题。
 
@@ -442,7 +443,7 @@ viewer.registerMarkdownRenderPlugin({
 `everforest-hard-light-theme.el` / `everforest-hard-dark-theme.el` 配色制作，包含 Org 标题层级、TODO/DONE、表格、代码块、任务列表和实时编辑状态样式。
 
 如果 Org 文件来自同级的 Orglist GTD 应用，可在设置中把
-`plugins/orglist-gtd-format.js` 选为 **Org 默认渲染插件**。TODO/NEXT/DONE/CNCL、
+`plugins/everforest-org-theme.js` 和 `plugins/orglist-gtd-format.js` 都加入 **Org 默认插件列表**。前者负责主题，后者负责 GTD 语法；TODO/NEXT/DONE/CNCL、
 优先级、尾部标签、Habit、LOGBOOK、农历周年、计划时间和常用属性的特殊显示
 全部封装在该插件中，不写入查看器核心。
 
