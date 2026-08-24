@@ -2,7 +2,7 @@
  * Everforest reading theme for Markdown and Org previews.
  * Palette and Org face choices are adapted from the supplied Emacs themes:
  *   everforest-hard-light-theme.el / everforest-hard-dark-theme.el
- * Load from Settings -> Default Markdown / Org render plugin.
+ * Load from Settings -> Org default render plugin.
  */
 export default {
   // Replace the built-in reading theme instead of stacking conflicting rules.

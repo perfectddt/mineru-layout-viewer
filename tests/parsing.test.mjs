@@ -106,6 +106,10 @@ test('rich Markdown plugin renders HTML breaks, tables, tasks, footnotes and TeX
 
 $E=mc^2$
 
+$$
+a^2+b^2=c^2
+$$
+
 note[^1]
 
 [^1]: footnote`)
@@ -114,6 +118,7 @@ note[^1]
   assert.match(html, /<table/)
   assert.match(html, /task-list-item/)
   assert.match(html, /<math/)
+  assert.match(html, /a\^2\+b\^2=c\^2/)
   assert.match(html, /footnotes/)
 })
 

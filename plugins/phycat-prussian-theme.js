@@ -5,7 +5,7 @@
  *   %APPDATA%/Typora/themes/phycat-prussian.css
  *   %APPDATA%/Typora/themes/phycat/phycat.light.css
  *
- * Load it from Settings -> Default Markdown render plugin. The bundled font
+ * Load it from Settings -> Markdown default render plugin. The bundled font
  * files live in /plugins/phycat/ and are copied from the supplied Typora theme.
  */
 export default {

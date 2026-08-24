@@ -78,7 +78,11 @@ interface ViewerSettings {
 }
 
 const VIEWER_SETTINGS_KEY = 'mineru-layout-viewer-settings-v1'
-const RENDER_PLUGIN_KEY = 'mineru-layout-viewer-default-render-plugin-v1'
+const LEGACY_RENDER_PLUGIN_KEY = 'mineru-layout-viewer-default-render-plugin-v1'
+const RENDER_PLUGIN_KEYS: Record<DocumentFormat, string> = {
+  markdown: 'mineru-layout-viewer-default-markdown-plugin-v2',
+  org: 'mineru-layout-viewer-default-org-plugin-v2',
+}
 const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   workspaceLayout: 'side',
   workspaceLeftPercent: 50,
@@ -221,6 +225,18 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .live-preview-mode .live-editable:hover { box-shadow:inset 3px 0 0 rgba(37,99,235,.3); }
 .live-preview-mode .live-editable:focus { background:rgba(37,99,235,.045); box-shadow:inset 3px 0 0 #2563eb; }
 .live-preview-mode .live-editable:empty::before { content:'输入内容…'; color:#94a3b8; }
+.live-preview-mode .live-source-active { white-space:pre-wrap; word-break:break-word; }
+.live-preview-mode .live-source-active .live-source-code { display:inline; white-space:pre-wrap; font:inherit; color:inherit; background:transparent; outline:0; }
+.live-preview-mode pre.live-source-active .live-source-code { display:block; }
+.live-preview-mode ul.live-source-active,.live-preview-mode ol.live-source-active { padding-left:1.8em; }
+.live-preview-mode table.live-source-active td { white-space:pre-wrap; }
+.live-syntax-marker { color:#94a3b8!important; font-weight:400!important; font-style:normal!important; text-decoration:none!important; opacity:.88; }
+.live-syntax-strong { font-weight:700; color:inherit; }
+.live-syntax-em { font-style:italic; color:inherit; }
+.live-syntax-strike { text-decoration:line-through; color:inherit; }
+.live-syntax-code { padding:.08em .25em; border-radius:3px; color:#b45309; background:rgba(245,158,11,.10); font-family:'Cascadia Code',Consolas,monospace; }
+.live-syntax-math { padding:.04em .2em; color:#7c3aed; background:rgba(124,58,237,.08); font-family:'Cascadia Code',Consolas,monospace; }
+.live-syntax-link { color:#2563eb; text-decoration:underline; text-underline-offset:2px; }
 .source-editor-host { flex:1; width:100%; height:100%; min-height:0; overflow:hidden; }
 .source-editor-host .cm-editor { height:100%; }
 .standalone-source-split { position:relative; display:grid; grid-template-columns:var(--standalone-first, 50%) 1fr; gap:0; width:100%; height:100%; min-height:0; overflow:hidden; }
@@ -313,7 +329,10 @@ export class MineruLayoutViewer extends HTMLElement {
   private progressHideTimer: ReturnType<typeof setTimeout> | null = null
   private viewerSettings: ViewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
   private activeDefaultRenderPluginName = 'mineru-reading-theme'
-  private activeDefaultRenderPluginLabel = '内置阅读主题'
+  private defaultRenderPlugins: Record<DocumentFormat, { plugin: MarkdownRenderPlugin; label: string }> = {
+    markdown: { plugin: createElegantReadingTheme(), label: '内置阅读主题' },
+    org: { plugin: createElegantReadingTheme(), label: '内置阅读主题' },
+  }
   private documentPluginFontStyle: HTMLStyleElement | null = null
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
@@ -327,7 +346,7 @@ export class MineruLayoutViewer extends HTMLElement {
   connectedCallback() {
     this.render()
     this.setupResize()
-    void this.restoreDefaultRenderPlugin()
+    void this.restoreDefaultRenderPlugins()
   }
 
   disconnectedCallback() {
@@ -352,6 +371,8 @@ export class MineruLayoutViewer extends HTMLElement {
     }
     if (name === 'layout' && newValue) void this.loadLayout(newValue)
     if (name === 'markdown' && newValue) {
+      this.documentFormat = 'markdown'
+      this.activateDefaultRenderPlugin('markdown')
       this.markdownText = newValue
       void this.rebuild()
     }
@@ -371,6 +392,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   async loadMarkdown(text: string) {
     this.documentFormat = 'markdown'
+    this.activateDefaultRenderPlugin('markdown')
     this.markdownText = text
     await this.rebuild()
   }
@@ -379,6 +401,7 @@ export class MineruLayoutViewer extends HTMLElement {
   async loadMarkdownFile(file: File, handle?: FileSystemFileHandle) {
     this.resetReviewState()
     this.documentFormat = documentFormatFromName(file.name)
+    this.activateDefaultRenderPlugin(this.documentFormat)
     const formatLabel = this.documentFormat === 'org' ? 'Org' : 'Markdown'
     this.startLoadProgress(`正在读取 ${formatLabel}…`)
     this.standaloneMarkdown = true
@@ -410,21 +433,22 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   /** Load a JavaScript render/theme plugin exported as default or markdownRenderPlugin. */
-  async loadMarkdownRenderPlugin(file: File) {
+  async loadMarkdownRenderPlugin(file: File, format: DocumentFormat = this.documentFormat) {
     if (!/\.m?js$/i.test(file.name)) throw new Error('渲染插件必须是 .js 或 .mjs 文件')
-    if (!confirm(`加载插件会执行其中的 JavaScript，并把它设为以后默认使用的渲染插件。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
+    const formatLabel = format === 'org' ? 'Org' : 'Markdown'
+    if (!confirm(`加载插件会执行其中的 JavaScript，并把它设为以后默认使用的 ${formatLabel} 渲染插件。只加载你信任的文件。\n\n继续加载 ${file.name}？`)) return
     const source = await file.text()
     const plugin = await this.importMarkdownRenderPlugin(source)
-    this.setActiveDefaultRenderPlugin(plugin, file.name)
+    this.setDefaultRenderPlugin(format, plugin, file.name)
     let persisted = false
     try {
-      localStorage.setItem(RENDER_PLUGIN_KEY, JSON.stringify({ fileName: file.name, source }))
+      localStorage.setItem(RENDER_PLUGIN_KEYS[format], JSON.stringify({ fileName: file.name, source }))
       persisted = true
     } catch { /* localStorage may be disabled */ }
     this.updateSettingsControls()
     alert(persisted
-      ? `已加载并设为默认渲染插件：${plugin.name}`
-      : `已加载渲染插件：${plugin.name}\n浏览器未允许保存设置，下次打开时需要重新加载。`)
+      ? `已加载并设为默认 ${formatLabel} 渲染插件：${plugin.name}`
+      : `已加载 ${formatLabel} 渲染插件：${plugin.name}\n浏览器未允许保存设置，下次打开时需要重新加载。`)
   }
 
   private async importMarkdownRenderPlugin(source: string): Promise<MarkdownRenderPlugin> {
@@ -442,32 +466,45 @@ export class MineruLayoutViewer extends HTMLElement {
     }
   }
 
-  private setActiveDefaultRenderPlugin(plugin: MarkdownRenderPlugin, label = plugin.name) {
-    if (this.activeDefaultRenderPluginName !== plugin.name) {
-      this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== this.activeDefaultRenderPluginName)
-    }
-    this.activeDefaultRenderPluginName = plugin.name
-    this.activeDefaultRenderPluginLabel = label
-    this.registerMarkdownRenderPlugin(plugin)
-  }
-
-  private async restoreDefaultRenderPlugin() {
-    try {
-      const saved = localStorage.getItem(RENDER_PLUGIN_KEY)
-      if (!saved) return
-      const data = JSON.parse(saved) as { source?: string; fileName?: string }
-      if (!data.source) return
-      this.setActiveDefaultRenderPlugin(await this.importMarkdownRenderPlugin(data.source), data.fileName || '自定义渲染插件')
-      this.updateSettingsControls()
-    } catch (error) {
-      console.warn('无法恢复默认 Markdown 渲染插件', error)
-    }
-  }
-
-  private restoreBuiltinRenderPlugin() {
-    try { localStorage.removeItem(RENDER_PLUGIN_KEY) } catch { /* ignored */ }
-    this.setActiveDefaultRenderPlugin(createElegantReadingTheme(), '内置阅读主题')
+  private setDefaultRenderPlugin(format: DocumentFormat, plugin: MarkdownRenderPlugin, label = plugin.name) {
+    this.defaultRenderPlugins[format] = { plugin, label }
+    if (format === this.documentFormat) this.activateDefaultRenderPlugin(format)
     this.updateSettingsControls()
+  }
+
+  private activateDefaultRenderPlugin(format: DocumentFormat) {
+    const selected = this.defaultRenderPlugins[format]
+    this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== this.activeDefaultRenderPluginName)
+    this.activeDefaultRenderPluginName = selected.plugin.name
+    this.registerMarkdownRenderPlugin(selected.plugin)
+  }
+
+  private async restoreDefaultRenderPlugins() {
+    for (const format of ['markdown', 'org'] as DocumentFormat[]) {
+      try {
+        const saved = localStorage.getItem(RENDER_PLUGIN_KEYS[format])
+          || (format === 'markdown' ? localStorage.getItem(LEGACY_RENDER_PLUGIN_KEY) : null)
+        if (!saved) continue
+        const data = JSON.parse(saved) as { source?: string; fileName?: string }
+        if (!data.source) continue
+        this.defaultRenderPlugins[format] = {
+          plugin: await this.importMarkdownRenderPlugin(data.source),
+          label: data.fileName || '自定义渲染插件',
+        }
+      } catch (error) {
+        console.warn(`无法恢复默认 ${format === 'org' ? 'Org' : 'Markdown'} 渲染插件`, error)
+      }
+    }
+    this.activateDefaultRenderPlugin(this.documentFormat)
+    this.updateSettingsControls()
+  }
+
+  private restoreBuiltinRenderPlugin(format: DocumentFormat) {
+    try {
+      localStorage.removeItem(RENDER_PLUGIN_KEYS[format])
+      if (format === 'markdown') localStorage.removeItem(LEGACY_RENDER_PLUGIN_KEY)
+    } catch { /* ignored */ }
+    this.setDefaultRenderPlugin(format, createElegantReadingTheme(), '内置阅读主题')
   }
 
   /** Load one MinerU result ZIP and keep it in memory for review edits. */
@@ -573,6 +610,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
     this.markdownText = await this.zip.file(this.markdownPath)!.async('text')
     this.documentFormat = 'markdown'
+    this.activateDefaultRenderPlugin('markdown')
 
     const contentListPath = names.find(name =>
       /(?:^|\/)(?:content_list|.+_content_list)\.json$/i.test(name),
@@ -830,21 +868,28 @@ export class MineruLayoutViewer extends HTMLElement {
           <div class="settings-row"><label for="pdfOutlineSize">默认大小</label><input id="pdfOutlineSize" type="range" min="15" max="70" step="1"><output id="pdfOutlineSizeValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group">
-          <strong>单 Markdown code 工作区</strong>
+          <strong>单 Markdown / Org code 工作区</strong>
           <div class="settings-row"><label for="standaloneSourceLayout">排列</label><select id="standaloneSourceLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
           <div class="settings-row"><label for="standaloneSourceRatio">左/上编辑区</label><input id="standaloneSourceRatio" type="range" min="20" max="80" step="1"><output id="standaloneSourceRatioValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group">
-          <strong>Markdown 大纲</strong>
+          <strong>Markdown / Org 大纲</strong>
           <div class="settings-row"><label for="mdOutlineLayout">排列</label><select id="mdOutlineLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
           <div class="settings-row"><label for="mdOutlineSize">默认大小</label><input id="mdOutlineSize" type="range" min="15" max="70" step="1"><output id="mdOutlineSizeValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group settings-plugin">
-          <strong>默认 Markdown / Org 渲染插件</strong>
-          <div id="defaultPluginName" class="settings-plugin-name"></div>
-          <button id="loadTheme" title="加载本地 JavaScript 渲染/主题插件">选择插件…</button>
-          <button id="restoreTheme">恢复内置</button>
-          <input id="themeFile" class="plugin-input" type="file" accept=".js,.mjs">
+          <strong>Markdown 默认渲染插件</strong>
+          <div id="markdownPluginName" class="settings-plugin-name"></div>
+          <button id="loadMarkdownTheme" title="只用于 Markdown 的本地 JavaScript 渲染/主题插件">选择插件…</button>
+          <button id="restoreMarkdownTheme">恢复内置</button>
+          <input id="markdownThemeFile" class="plugin-input" type="file" accept=".js,.mjs">
+        </div>
+        <div class="settings-group settings-plugin">
+          <strong>Org 默认渲染插件</strong>
+          <div id="orgPluginName" class="settings-plugin-name"></div>
+          <button id="loadOrgTheme" title="只用于 Org 的本地 JavaScript 渲染/主题插件">选择插件…</button>
+          <button id="restoreOrgTheme">恢复内置</button>
+          <input id="orgThemeFile" class="plugin-input" type="file" accept=".js,.mjs">
         </div>
       </aside>`
 
@@ -895,14 +940,18 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('saveLocalMarkdown')!.addEventListener('click', () => {
       void this.saveMarkdownToFolder()
     })
-    const themeFile = this.shadowRoot.getElementById('themeFile') as HTMLInputElement
-    this.shadowRoot.getElementById('loadTheme')!.addEventListener('click', () => themeFile.click())
-    this.shadowRoot.getElementById('restoreTheme')!.addEventListener('click', () => this.restoreBuiltinRenderPlugin())
-    themeFile.addEventListener('change', () => {
-      const file = themeFile.files?.[0]
-      if (file) void this.loadMarkdownRenderPlugin(file)
-      themeFile.value = ''
-    })
+    const setupThemeInput = (format: DocumentFormat, inputId: string, loadId: string, restoreId: string) => {
+      const input = this.shadowRoot!.getElementById(inputId) as HTMLInputElement
+      this.shadowRoot!.getElementById(loadId)!.addEventListener('click', () => input.click())
+      this.shadowRoot!.getElementById(restoreId)!.addEventListener('click', () => this.restoreBuiltinRenderPlugin(format))
+      input.addEventListener('change', () => {
+        const file = input.files?.[0]
+        if (file) void this.loadMarkdownRenderPlugin(file, format)
+        input.value = ''
+      })
+    }
+    setupThemeInput('markdown', 'markdownThemeFile', 'loadMarkdownTheme', 'restoreMarkdownTheme')
+    setupThemeInput('org', 'orgThemeFile', 'loadOrgTheme', 'restoreOrgTheme')
     const findInput = this.shadowRoot.getElementById('findText') as HTMLInputElement
     findInput.addEventListener('input', () => this.updateSearchResults())
     this.shadowRoot.getElementById('findRegex')!.addEventListener('change', () => this.updateSearchResults())
@@ -1167,8 +1216,10 @@ export class MineruLayoutViewer extends HTMLElement {
     if (standaloneLayout) standaloneLayout.value = this.viewerSettings.standaloneSourceLayout
     if (pdfLayout) pdfLayout.value = this.viewerSettings.pdfOutlineLayout
     if (mdLayout) mdLayout.value = this.viewerSettings.markdownOutlineLayout
-    const pluginName = shadow.getElementById('defaultPluginName')
-    if (pluginName) pluginName.textContent = this.activeDefaultRenderPluginLabel
+    const markdownPluginName = shadow.getElementById('markdownPluginName')
+    const orgPluginName = shadow.getElementById('orgPluginName')
+    if (markdownPluginName) markdownPluginName.textContent = this.defaultRenderPlugins.markdown.label
+    if (orgPluginName) orgPluginName.textContent = this.defaultRenderPlugins.org.label
   }
 
   private updateOutlineLayout(kind: 'pdf' | 'markdown') {
@@ -1613,6 +1664,30 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private annotatePreviewBlocks(preview: HTMLElement) {
+    const displayMathRanges: Array<[number, number]> = []
+    const sourceLines = (this.markdownText || '').split(/\r?\n/)
+    let mathStart = -1
+    sourceLines.forEach((line, index) => {
+      const delimiters = (line.match(/\$\$/g) || []).length
+      if (mathStart < 0 && delimiters) {
+        mathStart = index
+        if (delimiters > 1) {
+          displayMathRanges.push([index, index + 1])
+          mathStart = -1
+        }
+      } else if (mathStart >= 0 && delimiters) {
+        displayMathRanges.push([mathStart, index + 1])
+        mathStart = -1
+      }
+    })
+    const displayMath = Array.from(preview.querySelectorAll<HTMLElement>(':scope > section'))
+      .filter(element => element.querySelector('eqn') && !element.hasAttribute('data-md-start-line'))
+    displayMath.forEach((element, index) => {
+      const range = displayMathRanges[index]
+      if (!range) return
+      element.dataset.mdStartLine = String(range[0])
+      element.dataset.mdEndLine = String(range[1])
+    })
     for (const element of preview.querySelectorAll<HTMLElement>('[data-md-start-line]')) {
       const startLine = Number(element.dataset.mdStartLine)
       const endLine = Number(element.dataset.mdEndLine)
@@ -1633,6 +1708,11 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!block) return
     if (this.markdownMode === 'live' && !event.ctrlKey && !event.metaKey) {
       if (target.closest('a')) event.preventDefault()
+      const editable = target.closest<HTMLElement>('.live-editable')
+      if (editable) {
+        this.beginLiveEdit(editable)
+        editable.focus()
+      }
       return
     }
     const sectionIndex = Number(block.dataset.idx)
@@ -1653,7 +1733,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   /** Make rendered blocks themselves editable; no textarea or save dialog is involved. */
   private enableLivePreviewEditing(preview: HTMLElement) {
-    const editableTags = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE'])
+    const editableTags = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE', 'SECTION'])
     for (const element of Array.from(preview.children) as HTMLElement[]) {
       if (!editableTags.has(element.tagName)) continue
       if (!element.hasAttribute('data-md-start-line')) {
@@ -1716,6 +1796,8 @@ export class MineruLayoutViewer extends HTMLElement {
       originalSections: this.sections,
       changed: false,
     }
+    const source = this.markdownText.slice(start, end).replace(/\r?\n$/, '')
+    this.showLiveSource(element, source)
   }
 
   private syncLiveEdit(element: HTMLElement) {
@@ -1725,7 +1807,11 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!session) return
     const currentSource = this.markdownText.slice(session.start, session.end)
     const lineEnding = currentSource.match(/\r?\n$/)?.[0] || ''
-    const replacement = this.blockElementToSource(element).replace(/\s+$/, '') + lineEnding
+    const sourceHost = element.querySelector<HTMLElement>('.live-source-code')
+    const editedSource = sourceHost
+      ? (sourceHost.innerText || sourceHost.textContent || '').replace(/\r\n?/g, '\n')
+      : this.blockElementToSource(element)
+    const replacement = editedSource.replace(/\s+$/, '') + lineEnding
     this.markdownText = this.markdownText.slice(0, session.start) + replacement + this.markdownText.slice(session.end)
     session.end = session.start + replacement.length
     session.changed = this.markdownText !== session.originalDocument
@@ -1752,7 +1838,78 @@ export class MineruLayoutViewer extends HTMLElement {
     }
     const status = this.shadowRoot?.getElementById('sourceStatus')
     if (status) status.textContent = ''
-    if (rebuild && this.markdownMode === 'live' && session.changed) this.rebuildMarkdownView()
+    if (rebuild && this.markdownMode === 'live') this.rebuildMarkdownView()
+  }
+
+  private showLiveSource(element: HTMLElement, source: string) {
+    const highlighted = this.highlightLiveSource(source)
+    element.classList.add('live-source-active')
+    if (element.tagName === 'TABLE') {
+      element.innerHTML = `<tbody><tr><td><span class="live-source-code">${highlighted}</span></td></tr></tbody>`
+    } else if (element.tagName === 'UL' || element.tagName === 'OL') {
+      element.innerHTML = `<li><span class="live-source-code">${highlighted}</span></li>`
+    } else if (element.tagName === 'PRE') {
+      element.innerHTML = `<code class="live-source-code">${highlighted}</code>`
+    } else {
+      element.innerHTML = `<span class="live-source-code">${highlighted}</span>`
+    }
+    const host = element.querySelector<HTMLElement>('.live-source-code')
+    if (!host) return
+    queueMicrotask(() => {
+      const selection = document.getSelection()
+      if (!selection || !host.isConnected) return
+      const range = document.createRange()
+      range.selectNodeContents(host)
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    })
+  }
+
+  private highlightLiveSource(source: string): string {
+    const escape = (value: string) => this.escapeHtml(value)
+    const marker = (value: string) => `<span class="live-syntax-marker">${escape(value)}</span>`
+    const plain = (value: string) => value.split('\n').map(line => {
+      const pattern = this.documentFormat === 'org'
+        ? /^(\*+\s+|#\+[A-Z_]+(?::|\s+)|[-+]\s+|\d+[.)]\s+)/i
+        : /^(#{1,6}\s+|[-+*]\s+|\d+[.)]\s+|>\s+)/
+      const match = line.match(pattern)
+      return match ? marker(match[1]) + escape(line.slice(match[1].length)) : escape(line)
+    }).join('<br>')
+
+    const tokenPattern = this.documentFormat === 'org'
+      ? /(\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\[\[[^\]]+\](?:\[[^\]]*\])?\]|\*[^*\n]+\*|\/[^/\n]+\/|\+[^+\n]+\+|~[^~\n]+~|=[^=\n]+=)/g
+      : /(\$\$[\s\S]*?\$\$|\$[^$\n]+\$|!\[[^\]]*\]\([^\n)]*\)|\[[^\]]+\]\([^\n)]*\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|\*[^*\n]+\*|_[^_\n]+_)/g
+    let output = ''
+    let cursor = 0
+    let match: RegExpExecArray | null
+    while ((match = tokenPattern.exec(source))) {
+      output += plain(source.slice(cursor, match.index))
+      const token = match[0]
+      if (token.startsWith('$$') || (token.startsWith('$') && token.endsWith('$'))) {
+        const width = token.startsWith('$$') ? 2 : 1
+        output += marker(token.slice(0, width))
+          + `<span class="live-syntax-math">${escape(token.slice(width, -width))}</span>`
+          + marker(token.slice(-width))
+      } else if (this.documentFormat === 'markdown' && (token.startsWith('**') || token.startsWith('__'))) {
+        output += marker(token.slice(0, 2)) + `<span class="live-syntax-strong">${escape(token.slice(2, -2))}</span>` + marker(token.slice(-2))
+      } else if (this.documentFormat === 'org' && token.startsWith('*')) {
+        output += marker('*') + `<span class="live-syntax-strong">${escape(token.slice(1, -1))}</span>` + marker('*')
+      } else if ((this.documentFormat === 'markdown' && (token.startsWith('*') || token.startsWith('_')))
+        || (this.documentFormat === 'org' && token.startsWith('/'))) {
+        output += marker(token[0]) + `<span class="live-syntax-em">${escape(token.slice(1, -1))}</span>` + marker(token.slice(-1))
+      } else if (token.startsWith('~~')) {
+        output += marker('~~') + `<span class="live-syntax-strike">${escape(token.slice(2, -2))}</span>` + marker('~~')
+      } else if (this.documentFormat === 'org' && token.startsWith('+')) {
+        output += marker('+') + `<span class="live-syntax-strike">${escape(token.slice(1, -1))}</span>` + marker('+')
+      } else if (token.startsWith('`') || token.startsWith('~') || (this.documentFormat === 'org' && token.startsWith('='))) {
+        output += marker(token[0]) + `<span class="live-syntax-code">${escape(token.slice(1, -1))}</span>` + marker(token.slice(-1))
+      } else {
+        output += `<span class="live-syntax-link">${escape(token)}</span>`
+      }
+      cursor = match.index + token.length
+    }
+    return output + plain(source.slice(cursor))
   }
 
   private blockElementToSource(element: HTMLElement): string {

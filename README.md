@@ -35,7 +35,7 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Resizable workspace + outlines** — arrange PDF/Markdown side-by-side or top/bottom, swap their positions, and drag the split; outlines also support side/stack layouts
 - **Persistent settings** — remember workspace ratios, outline direction/size, and a trusted default render plugin
 - **Standalone Markdown editor** — CodeMirror/live-preview panes support side or stacked layout, draggable ratios, center-line swapping, and bidirectional navigation
-- **Typora-style live editing** — rendered headings, paragraphs, lists, tables, and code blocks are directly editable and continuously synchronized to source
+- **Typora-style hybrid editing** — focusing a rendered block reveals its real Markdown/Org markers with syntax styling while bold, italic, heading, and math semantics remain visible
 - **Standalone Org editor** — open `.org` files with the same preview/live/Code/Vim, outline, search/replace, history, zoom, layout, and local-save workflow
 - **Large PDF support** — renders PDF pages only near the viewport
 - **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
@@ -178,7 +178,7 @@ interface MdSection {
 | `exportEditedZip(): Promise<void>`       | Download the edited result ZIP         |
 | `registerMarkdownRenderPlugin(plugin)`   | Add Markdown-it rules, preview styles, or post-render hooks |
 | `registerMarkdownEditorPlugin(plugin)`   | Add a CodeMirror 6 editor extension     |
-| `loadMarkdownRenderPlugin(file)`         | Load a trusted local `.js`/`.mjs` render plugin |
+| `loadMarkdownRenderPlugin(file, format?)` | Load a trusted local `.js`/`.mjs` plugin for `markdown` or `org` |
 
 ```js
 viewer.registerMarkdownRenderPlugin({
@@ -191,8 +191,10 @@ viewer.registerMarkdownRenderPlugin({
 The viewer enables sanitized HTML (`<br>`, HTML tables), GFM tables, task lists,
 footnotes and KaTeX by default. To customize the appearance, copy
 `plugins/ocean-reading-theme.js`, change its scoped `.md-preview` CSS, then click
-**Load render plugin**. A plugin is JavaScript and runs in the page, so only load
-files you trust. Reuse the name `mineru-reading-theme` to replace the built-in theme.
+**Load render plugin**. Markdown and Org keep separate default plugin selections,
+so each format can use its own fonts, colors, and background. A plugin is JavaScript
+and runs in the page, so only load files you trust. Reuse the name
+`mineru-reading-theme` to replace the corresponding built-in theme.
 
 ### Image edit semantics
 
@@ -250,7 +252,7 @@ MIT
 - **可拖动工作区与目录** — PDF/Markdown 支持左右或上下排列、位置交换和分隔线拖动；书签/大纲也支持左右或上下排列
 - **持久化设置** — 记住主工作区比例、目录方向/大小以及可信的默认渲染插件
 - **单 Markdown 编辑器** — `code` 模式的源码/渲染支持左右或上下排列、拖动比例、中线交换和双向定位
-- **Typora 式实时编辑** — 独立“实时预览”模式可直接在渲染后的标题、段落、列表、表格和代码块中输入，并持续同步源文件
+- **Typora 式混合编辑** — 聚焦当前块时显示真实 Markdown/Org 标记并进行语法着色，同时保留粗体、斜体、标题和公式源码的语义样式
 - **单 Org 编辑器** — `.org` 文件同样支持预览/实时预览/Code/Vim、大纲、搜索替换、历史、缩放、布局和覆盖保存
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
@@ -392,7 +394,7 @@ interface MdSection {
 | `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
 | `registerMarkdownRenderPlugin(plugin)`   | 注册 Markdown-it 规则、预览样式或渲染后钩子 |
 | `registerMarkdownEditorPlugin(plugin)`   | 注册 CodeMirror 6 编辑扩展   |
-| `loadMarkdownRenderPlugin(file)`         | 加载可信的本地 `.js`/`.mjs` 渲染插件 |
+| `loadMarkdownRenderPlugin(file, format?)` | 为 `markdown` 或 `org` 加载可信的本地 `.js`/`.mjs` 渲染插件 |
 
 ```js
 viewer.registerMarkdownRenderPlugin({
@@ -404,9 +406,9 @@ viewer.registerMarkdownRenderPlugin({
 
 默认富渲染已启用：经过清洗的 HTML（含 `<br>`、HTML 表格）、GFM 表格、任务列表、
 脚注和 KaTeX。想换样式时，复制 `plugins/ocean-reading-theme.js` 并只修改其中
-作用于 `.md-preview` 的 CSS，然后点击右上角“设置”按钮，在“默认 Markdown 渲染插件”中选择该文件。插件会作为默认项保存在当前浏览器中。插件是会在
-页面中执行的 JavaScript，只加载自己信任的文件；沿用 `mineru-reading-theme` 名称会
-替换内置主题，而不是叠加两份主题。
+作用于 `.md-preview` 的 CSS，然后点击右上角“设置”按钮。Markdown 与 Org 各有独立的默认插件选择和本地保存项，切换文件格式时只启用对应插件，因此字体、颜色和背景不会互相覆盖。插件会在
+页面中执行 JavaScript，只加载自己信任的文件；沿用 `mineru-reading-theme` 名称会
+替换对应格式的内置主题，而不是叠加两份主题。
 
 项目还提供了根据 Typora `phycat-prussian.css` 与 `phycat/phycat.light.css` 改编的主题：
 `plugins/phycat-prussian-theme.js`。原主题的交叉斜线背景、霞鹜文楷和 Cascadia Code 字体均已保留；字体文件放在

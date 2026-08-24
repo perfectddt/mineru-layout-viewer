@@ -10,6 +10,8 @@
 
 第一行<br>第二行
 
+这是 **Markdown 加粗**、*斜体* 和 ~~删除线~~。
+
 | 项目 | 状态 |
 | --- | --- |
 | 表格 | 正常 |
@@ -19,6 +21,10 @@
 - [x] 任务列表
 
 公式：$E=mc^2$
+
+$$
+a^2+b^2=c^2
+$$
 
 脚注[^1]
 
@@ -36,14 +42,6 @@
     { type:'image', img_path:'images/not-found.png', page_idx:0, bbox:[100,200,900,700] }
   ]))
   await viewer.loadMarkdown(markdown)
-  if (new URLSearchParams(location.search).has('phycat')) {
-    const { default: theme } = await import('../plugins/phycat-prussian-theme.js')
-    viewer.registerMarkdownRenderPlugin(theme)
-  }
-  if (new URLSearchParams(location.search).has('everforest')) {
-    const { default: theme } = await import('../plugins/everforest-org-theme.js')
-    viewer.registerMarkdownRenderPlugin(theme)
-  }
   if (new URLSearchParams(location.search).has('standalone')) {
     const source = await fetch('../README.md').then(response => response.text())
     await viewer.loadMarkdownFile(new File([source], 'README.md', { type: 'text/markdown' }))
@@ -74,6 +72,14 @@ console.log('everforest')
       { path: 'sample/full.md', file: new File(['# 目录拖放测试\n\n正文'], 'full.md', { type: 'text/markdown' }) },
       { path: 'sample/content_list.json', file: new File([JSON.stringify([{ type:'text', text:'目录拖放测试', page_idx:0, bbox:[0,0,1000,200] }])], 'content_list.json', { type:'application/json' }) },
     ])
+  }
+  if (new URLSearchParams(location.search).has('phycat')) {
+    const { default: theme } = await import('../plugins/phycat-prussian-theme.js')
+    viewer.registerMarkdownRenderPlugin(theme)
+  }
+  if (new URLSearchParams(location.search).has('everforest')) {
+    const { default: theme } = await import('../plugins/everforest-org-theme.js')
+    viewer.registerMarkdownRenderPlugin(theme)
   }
   folderFixture.addEventListener('change', () => viewer.loadDirectory(folderFixture.files))
   markdownFixture.addEventListener('change', () => viewer.loadMarkdownFile(markdownFixture.files[0]))
