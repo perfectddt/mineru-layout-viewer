@@ -2,6 +2,12 @@ import JSZip from 'jszip'
 import { parseBlocks, normalizeAssetPath } from './parse-blocks.js'
 import { matchMarkdownToPdf, matchSectionsToPdf, normalize, lcsSimilarity } from './match-markdown.js'
 import { parseMarkdownSections } from './parse-markdown.js'
+import { MarkdownPreviewRenderer, type MarkdownRenderPlugin } from './markdown-preview.js'
+import {
+  MarkdownSourceEditor,
+  createVimEditorPlugin,
+  type MarkdownEditorPlugin,
+} from './markdown-source-editor.js'
 import type { PdfBlock, MdSection } from './parse-blocks.js'
 
 declare const pdfjsLib: typeof import('pdfjs-dist')
@@ -43,9 +49,14 @@ button:hover:not(:disabled) { border-color:#3b82f6; color:#1d4ed8; background:#e
 button:disabled { cursor:not-allowed; opacity:.45; }
 button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; background:#fef2f2; }
 .split { flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0; overflow:hidden; }
-.pane { overflow:auto; padding:10px; }
-.pane-left { border-right:1px solid #e5e7eb; background:#f8fafc; }
-.pane-right { background:#fff; --md-zoom:1; --md-image-width:100%; --md-image-height:520px; }
+.pane-column { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.left-column { border-right:1px solid #e5e7eb; }
+.pane-toolbar { min-height:42px; display:flex; align-items:center; gap:5px; padding:6px 9px; border-bottom:1px solid #e5e7eb; flex-shrink:0; font-size:12px; color:#6b7280; background:#fff; }
+.pane-toolbar .spacer { flex:1; }
+.pane-toolbar button.active { border-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
+.pane { flex:1; min-height:0; overflow:auto; padding:10px; }
+.pane-left { background:#f8fafc; }
+.pane-right { display:flex; flex-direction:column; background:#fff; --md-zoom:1; --md-image-width:100%; --md-image-height:520px; }
 .pdf-page { position:relative; margin:0 auto 12px; border:1px solid #e5e7eb; border-radius:4px; overflow:hidden; background:#fff; }
 .pdf-page > canvas { display:block; width:100%; height:100%; }
 .pdf-placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#9ca3af; font-size:12px; }
@@ -59,41 +70,58 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .md-line.match { border-left-color:rgba(245,158,11,.4); }
 .md-line.match:hover { background:rgba(245,158,11,.08); }
 .md-line.no-match { color:#9ca3af; }
-.md-line.active,.image-card.active { background:rgba(37,99,235,.08); border-color:#2563eb; box-shadow:inset 0 0 0 1px rgba(37,99,235,.25); }
+.md-line.active { background:rgba(37,99,235,.08); border-color:#2563eb; box-shadow:inset 0 0 0 1px rgba(37,99,235,.25); }
 .badge { display:inline-block; font-size:10px; color:#6b7280; margin-left:6px; font-family:system-ui,sans-serif; }
-.image-card { border:1px solid #e5e7eb; border-left:3px solid #f59e0b; border-radius:7px; margin:8px 0; overflow:hidden; background:#fff; cursor:pointer; }
-.image-preview { min-height:90px; display:flex; align-items:center; justify-content:center; padding:10px; background:#f8fafc; }
-.image-preview img { display:block; max-width:var(--md-image-width); max-height:var(--md-image-height); object-fit:contain; }
 .image-error { color:#b91c1c; font-size:12px; padding:16px; word-break:break-all; }
-.image-meta { display:flex; align-items:center; gap:7px; padding:7px 9px; border-top:1px solid #e5e7eb; font-size:11px; color:#6b7280; }
-.image-path { flex:1; min-width:0; font-family:'Cascadia Code',Consolas,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.image-actions { display:flex; gap:6px; padding:0 9px 9px; justify-content:flex-end; }
-.find-bar { display:none; align-items:center; gap:6px; padding:7px 10px; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex-shrink:0; }
-.find-bar.open { display:flex; }
+.find-bar { display:none; padding:8px 10px; border-bottom:1px solid #e5e7eb; background:#f8fafc; flex-shrink:0; }
+.find-bar.open { display:block; }
+.find-controls { display:flex; align-items:center; gap:6px; }
 .find-bar input { min-width:120px; flex:1; max-width:280px; border:1px solid #d1d5db; border-radius:5px; padding:6px 8px; font:12px system-ui,sans-serif; }
 .find-result { min-width:80px; font-size:11px; color:#6b7280; }
+.find-results { max-height:190px; overflow:auto; margin-top:7px; border-top:1px solid #e5e7eb; }
+.find-result-item { display:block; width:100%; text-align:left; border:0; border-bottom:1px solid #e5e7eb; border-radius:0; padding:6px 8px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.find-result-item.active { color:#b91c1c; background:#fef2f2; }
+.search-hit { color:#b91c1c; background:#fee2e2; border-radius:2px; padding:0 1px; }
 .legend { display:flex; align-items:center; gap:8px; font-size:10px; color:#6b7280; }
 .legend i { display:inline-block; width:12px; height:8px; margin-right:3px; vertical-align:middle; border:1px solid #2563eb; }
 .legend .visual { border:2px solid #f59e0b; }
 .legend .removed { border:2px dashed #dc2626; background:rgba(220,38,38,.12); }
-.editor-backdrop { position:absolute; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.42); }
-.editor-dialog { width:min(850px,96%); max-height:92%; display:flex; flex-direction:column; border:1px solid #cbd5e1; border-radius:9px; background:#fff; box-shadow:0 20px 45px rgba(15,23,42,.28); overflow:hidden; }
-.editor-title { padding:10px 12px; font-weight:600; border-bottom:1px solid #e5e7eb; }
-.editor-tools { display:flex; gap:5px; align-items:center; padding:7px 10px; border-bottom:1px solid #e5e7eb; }
-.editor-tools .code-tab { color:#2563eb; background:#eff6ff; }
-.editor-area { width:100%; min-height:150px; max-height:62vh; resize:vertical; border:0; outline:0; padding:12px; font:14px/1.65 'Cascadia Code',Consolas,monospace; color:#111827; }
-.editor-dialog.full .editor-area { min-height:58vh; }
-.editor-actions { display:flex; justify-content:flex-end; gap:8px; padding:9px 11px; border-top:1px solid #e5e7eb; }
-.editor-actions .save { background:#111827; color:#fff; border-color:#111827; }
-.pane-shell { min-height:0; position:relative; display:flex; flex-direction:column; }
+.md-preview { flex:none; width:100%; font-size:calc(15px * var(--md-zoom)); line-height:1.72; color:#1f2937; }
+.md-preview h1,.md-preview h2,.md-preview h3,.md-preview h4 { line-height:1.32; margin:1.1em 0 .55em; color:#111827; }
+.md-preview h1 { font-size:1.75em; border-bottom:1px solid #e5e7eb; padding-bottom:.3em; }
+.md-preview h2 { font-size:1.45em; border-bottom:1px solid #e5e7eb; padding-bottom:.25em; }
+.md-preview h3 { font-size:1.22em; }
+.md-preview p { margin:.55em 0; }
+.md-preview ul,.md-preview ol { padding-left:1.8em; margin:.55em 0; }
+.md-preview blockquote { margin:.7em 0; padding:.2em .9em; border-left:4px solid #94a3b8; color:#64748b; background:#f8fafc; }
+.md-preview code { padding:.12em .3em; border-radius:4px; background:#f1f5f9; font-family:'Cascadia Code',Consolas,monospace; }
+.md-preview pre { overflow:auto; padding:11px; border-radius:6px; background:#0f172a; color:#e2e8f0; }
+.md-preview pre code { padding:0; background:transparent; color:inherit; }
+.md-preview table { width:100%; border-collapse:collapse; margin:.8em 0; }
+.md-preview th,.md-preview td { border:1px solid #cbd5e1; padding:6px 8px; }
+.md-preview th { background:#f1f5f9; }
+.md-preview a { color:#2563eb; }
+.md-preview img.md-asset { display:block; max-width:var(--md-image-width); max-height:var(--md-image-height); margin:8px auto; object-fit:contain; }
+.md-preview [data-md-start-line] { border-radius:4px; transition:background .12s,box-shadow .12s; }
+.md-preview [data-md-start-line]:hover { background:rgba(37,99,235,.045); box-shadow:inset 3px 0 0 rgba(37,99,235,.35); }
+.md-preview [data-md-start-line].active { background:rgba(37,99,235,.08); box-shadow:inset 3px 0 0 #2563eb; }
+.preview-image-actions { display:flex; justify-content:flex-end; gap:6px; margin:5px 0 10px; }
+.inline-editor { margin:8px 0; border:1px solid #60a5fa; border-radius:7px; overflow:hidden; background:#fff; box-shadow:0 3px 12px rgba(37,99,235,.12); }
+.inline-editor-tools { display:flex; align-items:center; gap:5px; padding:6px 8px; border-bottom:1px solid #dbeafe; background:#eff6ff; }
+.inline-editor-tools .spacer { flex:1; }
+.inline-editor textarea { display:block; width:100%; min-height:120px; max-height:55vh; resize:vertical; border:0; outline:0; padding:10px; font:14px/1.65 'Cascadia Code',Consolas,monospace; }
+.source-editor-host { flex:1; width:100%; height:100%; min-height:0; overflow:hidden; }
+.source-editor-host .cm-editor { height:100%; }
+.source-status { color:#2563eb; font-weight:600; }
 .empty { display:flex; align-items:center; justify-content:center; height:100%; color:#9ca3af; text-align:center; padding:30px; }
 @media (prefers-color-scheme:dark) {
   :host { color:#e5e7eb; background:#111827; }
-  .toolbar,.toolbar-group,.find-bar,.pane-left,.image-meta,.editor-title,.editor-tools,.editor-actions { border-color:#374151; }
-  .pane-left,.image-preview { background:#111827; }
-  .pane-right,.image-card,.pdf-page,button,.editor-dialog,.editor-area,.find-bar { background:#1f2937; color:#e5e7eb; }
-  .image-card { border-color:#374151; border-left-color:#f59e0b; }
-  .image-meta { color:#9ca3af; }
+  .toolbar,.toolbar-group,.find-bar,.find-results,.find-result-item,.pane-toolbar,.left-column,.pane-left { border-color:#374151; }
+  .pane-left { background:#111827; }
+  .pane-right,.pdf-page,button,.find-bar { background:#1f2937; color:#e5e7eb; }
+  .pane-toolbar,.md-preview,.inline-editor,.inline-editor textarea { background:#1f2937; color:#e5e7eb; }
+  .md-preview h1,.md-preview h2,.md-preview h3,.md-preview h4 { color:#f8fafc; border-color:#374151; }
+  .md-preview blockquote,.md-preview th,.md-preview code { background:#111827; }
 }
 `
 
@@ -125,6 +153,14 @@ export class MineruLayoutViewer extends HTMLElement {
   private findCursor = 0
   private currentFindStart = -1
   private resizeTimer: ReturnType<typeof setTimeout> | null = null
+  private previewRenderer = new MarkdownPreviewRenderer()
+  private markdownRenderPlugins: MarkdownRenderPlugin[] = []
+  private markdownEditorPlugins: MarkdownEditorPlugin[] = []
+  private sourceEditor: MarkdownSourceEditor | null = null
+  private markdownMode: 'preview' | 'source' = 'preview'
+  private sourceDraft = ''
+  private vimEnabled = true
+  private searchResults: Array<{ start: number; end: number; sectionIndex: number; snippet: string }> = []
 
   static observedAttributes = ['pdf', 'layout', 'markdown']
 
@@ -143,6 +179,8 @@ export class MineruLayoutViewer extends HTMLElement {
     if (this.resizeTimer) clearTimeout(this.resizeTimer)
     this.imageObserver?.disconnect()
     this.pdfPageObserver?.disconnect()
+    this.sourceEditor?.destroy()
+    this.sourceEditor = null
     void this.pdfDocument?.destroy()
     this.revokeAssetUrls()
     this.revokeOwnedPdfUrl()
@@ -175,6 +213,23 @@ export class MineruLayoutViewer extends HTMLElement {
   async loadMarkdown(text: string) {
     this.markdownText = text
     await this.rebuild()
+  }
+
+  registerMarkdownRenderPlugin(plugin: MarkdownRenderPlugin) {
+    this.markdownRenderPlugins = this.markdownRenderPlugins.filter(item => item.name !== plugin.name)
+    this.markdownRenderPlugins.push(plugin)
+    this.previewRenderer.setPlugins(this.markdownRenderPlugins)
+    this.updatePluginStyles()
+    if (this.markdownMode === 'preview') this.buildMarkdown()
+  }
+
+  registerMarkdownEditorPlugin(plugin: MarkdownEditorPlugin) {
+    this.markdownEditorPlugins = this.markdownEditorPlugins.filter(item => item.name !== plugin.name)
+    this.markdownEditorPlugins.push(plugin)
+    if (this.markdownMode === 'source') {
+      this.sourceDraft = this.sourceEditor?.getValue() ?? this.sourceDraft
+      this.buildSourceEditor()
+    }
   }
 
   /** Load one MinerU result ZIP and keep it in memory for review edits. */
@@ -255,6 +310,7 @@ export class MineruLayoutViewer extends HTMLElement {
 
   /** Export the edited Markdown, replacement images, and an audit manifest. */
   async exportEditedZip() {
+    if (this.markdownMode === 'source') this.saveSourceAndPreview()
     if (!this.zip || !this.markdownPath || this.markdownText == null) return
     const exportButton = this.shadowRoot?.getElementById('export') as HTMLButtonElement | null
     if (exportButton) {
@@ -322,45 +378,64 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private render() {
     if (!this.shadowRoot) return
-    this.shadowRoot.innerHTML = `<style>${STYLES}</style>
+    this.shadowRoot.innerHTML = `<style>${STYLES}</style><style id="markdownPluginStyles"></style>
       <div class="toolbar">
         <span id="stat">加载 MinerU ZIP 以开始</span>
         <span id="dirty"></span>
         <span class="spacer"></span>
-        <div class="legend"><span><i></i>文字</span><span><i class="visual"></i>图片</span><span><i class="removed"></i>已删/未引用</span></div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">PDF</span>
-          <button id="pdfZoomOut" title="缩小 PDF">−</button>
-          <span id="pdfZoomValue" class="zoom-value">适合宽度</span>
-          <button id="pdfZoomIn" title="放大 PDF">＋</button>
-          <button id="fitPage">整页</button>
-          <button id="fitWidth">页宽</button>
-        </div>
-        <div class="toolbar-group">
-          <span class="toolbar-label">右侧</span>
-          <button id="mdZoomOut" title="缩小 Markdown">−</button>
-          <span id="mdZoomValue" class="zoom-value">100%</span>
-          <button id="mdZoomIn" title="放大 Markdown">＋</button>
-        </div>
-        <button id="toggleFind">查找替换</button>
-        <button id="editAll">全文编辑</button>
         <button id="undo" disabled>撤销</button>
         <button id="export" disabled>导出修改版 ZIP</button>
       </div>
-      <div class="find-bar" id="findBar">
-        <input id="findText" placeholder="查找文字（Ctrl+F）">
-        <input id="replaceText" placeholder="替换为">
-        <button id="findNext">下一处</button>
-        <button id="replaceOne">替换当前</button>
-        <button id="replaceAll">全部替换</button>
-        <span id="findResult" class="find-result"></span>
-        <button id="closeFind" title="关闭">×</button>
-      </div>
       <div class="split">
-        <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
-        <div class="pane pane-right" id="mdPane"><div class="empty">右侧将显示 Markdown 审核内容</div></div>
+        <section class="pane-column left-column">
+          <div class="pane-toolbar">
+            <strong>PDF</strong>
+            <div class="toolbar-group">
+              <button id="pdfZoomOut" title="缩小 PDF">−</button>
+              <span id="pdfZoomValue" class="zoom-value">适合宽度</span>
+              <button id="pdfZoomIn" title="放大 PDF">＋</button>
+              <button id="fitPage">整页</button>
+              <button id="fitWidth">页宽</button>
+            </div>
+            <span class="spacer"></span>
+            <div class="legend"><span><i></i>文字</span><span><i class="visual"></i>图片</span><span><i class="removed"></i>已删/未引用</span></div>
+          </div>
+          <div class="pane pane-left" id="pdfPane"><slot name="loading">加载 PDF + JSON 以开始</slot></div>
+        </section>
+        <section class="pane-column right-column" id="rightColumn">
+          <div class="pane-toolbar">
+            <strong>Markdown</strong>
+            <button id="mdPreviewMode" class="active">预览</button>
+            <button id="mdSourceMode">源码（全文）</button>
+            <div class="toolbar-group">
+              <button id="mdZoomOut" title="缩小 Markdown">−</button>
+              <span id="mdZoomValue" class="zoom-value">100%</span>
+              <button id="mdZoomIn" title="放大 Markdown">＋</button>
+            </div>
+            <button id="vimToggle" title="源码模式使用 Vim 键位">Vim：开</button>
+            <button id="toggleFind">查找替换</button>
+            <span class="spacer"></span>
+            <span id="sourceStatus" class="source-status"></span>
+            <button id="sourceSave" hidden>保存并预览</button>
+            <button id="sourceCancel" hidden>取消</button>
+          </div>
+          <div class="find-bar" id="findBar">
+            <div class="find-controls">
+              <input id="findText" placeholder="查找文字（结果将在下方列出）">
+              <input id="replaceText" placeholder="替换为">
+              <button id="findNext">下一处</button>
+              <button id="replaceOne">替换当前</button>
+              <button id="replaceAll">全部替换</button>
+              <span id="findResult" class="find-result"></span>
+              <button id="closeFind" title="关闭">×</button>
+            </div>
+            <div id="findResults" class="find-results"></div>
+          </div>
+          <div class="pane pane-right" id="mdPane"><div class="empty">右侧将显示 Markdown 审核内容</div></div>
+        </section>
       </div>`
 
+    this.updatePluginStyles()
     this.shadowRoot.getElementById('undo')!.addEventListener('click', () => {
       void this.undoLastEdit()
     })
@@ -373,12 +448,21 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('fitWidth')!.addEventListener('click', () => this.setPdfFitMode('width'))
     this.shadowRoot.getElementById('mdZoomOut')!.addEventListener('click', () => this.changeMarkdownZoom(-0.1))
     this.shadowRoot.getElementById('mdZoomIn')!.addEventListener('click', () => this.changeMarkdownZoom(0.1))
+    this.shadowRoot.getElementById('mdPreviewMode')!.addEventListener('click', () => this.saveSourceAndPreview())
+    this.shadowRoot.getElementById('mdSourceMode')!.addEventListener('click', () => this.switchToSourceMode())
+    this.shadowRoot.getElementById('vimToggle')!.addEventListener('click', () => this.toggleVimMode())
+    this.shadowRoot.getElementById('sourceSave')!.addEventListener('click', () => this.saveSourceAndPreview())
+    this.shadowRoot.getElementById('sourceCancel')!.addEventListener('click', () => this.cancelSourceMode())
     this.shadowRoot.getElementById('toggleFind')!.addEventListener('click', () => this.toggleFindBar(true))
     this.shadowRoot.getElementById('closeFind')!.addEventListener('click', () => this.toggleFindBar(false))
     this.shadowRoot.getElementById('findNext')!.addEventListener('click', () => this.findNext())
     this.shadowRoot.getElementById('replaceOne')!.addEventListener('click', () => this.replaceCurrentMatch())
     this.shadowRoot.getElementById('replaceAll')!.addEventListener('click', () => this.replaceAllMatches())
-    this.shadowRoot.getElementById('editAll')!.addEventListener('click', () => this.openMarkdownEditor())
+    const findInput = this.shadowRoot.getElementById('findText') as HTMLInputElement
+    findInput.addEventListener('input', () => this.updateSearchResults())
+    findInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') this.findNext()
+    })
     this.shadowRoot.addEventListener('keydown', event => {
       const keyboardEvent = event as KeyboardEvent
       if ((keyboardEvent.ctrlKey || keyboardEvent.metaKey) && keyboardEvent.key.toLowerCase() === 'f') {
@@ -434,6 +518,7 @@ export class MineruLayoutViewer extends HTMLElement {
     if (pane) pane.scrollTop = scrollTop
     this.updateOverlayStates()
     this.updateToolbar()
+    if (this.shadowRoot?.getElementById('findBar')?.classList.contains('open')) this.updateSearchResults()
   }
 
   private async renderPdfPages() {
@@ -473,7 +558,7 @@ export class MineruLayoutViewer extends HTMLElement {
     const dirty = shadow.getElementById('dirty')!
     dirty.className = this.reviewEdits.length ? 'dirty' : ''
     dirty.textContent = this.reviewEdits.length ? `已修改 ${this.reviewEdits.length} 项` : ''
-    ;(shadow.getElementById('undo') as HTMLButtonElement).disabled = this.undoStack.length === 0
+    ;(shadow.getElementById('undo') as HTMLButtonElement).disabled = this.undoStack.length === 0 || this.markdownMode === 'source'
     ;(shadow.getElementById('export') as HTMLButtonElement).disabled = !this.zip
     const pdfZoomValue = shadow.getElementById('pdfZoomValue')
     if (pdfZoomValue) {
@@ -594,6 +679,7 @@ export class MineruLayoutViewer extends HTMLElement {
     pane?.style.setProperty('--md-zoom', String(this.markdownZoom))
     pane?.style.setProperty('--md-image-width', `${Math.round(this.markdownZoom * 100)}%`)
     pane?.style.setProperty('--md-image-height', `${Math.round(520 * this.markdownZoom)}px`)
+    if (this.sourceEditor) this.sourceEditor.view.dom.style.fontSize = `${Math.round(14 * this.markdownZoom)}px`
     this.updateToolbar()
   }
 
@@ -673,101 +759,172 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private buildMarkdown() {
+    if (this.markdownMode === 'source') {
+      this.buildSourceEditor()
+      return
+    }
+    this.buildMarkdownPreview()
+  }
+
+  private buildMarkdownPreview() {
     const pane = this.shadowRoot!.getElementById('mdPane')!
+    this.sourceEditor?.destroy()
+    this.sourceEditor = null
     this.imageObserver?.disconnect()
     pane.innerHTML = ''
-    if (!this.sections.length) {
+    if (!this.markdownText?.trim()) {
       pane.innerHTML = '<div class="empty">没有可显示的 Markdown 内容</div>'
       return
     }
 
-    for (let index = 0; index < this.sections.length; index++) {
-      const section = this.sections[index]
-      if (section.kind === 'image' && section.imagePath) {
-        pane.appendChild(this.createImageCard(section, index))
-      } else {
-        const line = document.createElement('span')
-        line.className = 'md-line ' + (section.bbox ? 'match' : 'no-match')
-        line.tabIndex = 0
-        line.dataset.idx = String(index)
-        line.textContent = section.text
-        if (section.bbox) {
-          const badge = document.createElement('span')
-          badge.className = 'badge'
-          badge.textContent = `p${section.page}`
-          line.appendChild(badge)
-        }
-        line.addEventListener('click', () => this.onMdClick(section, index, line))
-        line.addEventListener('dblclick', event => {
-          event.preventDefault()
-          this.openSectionEditor(section, false)
-        })
-        line.title = '单击定位 PDF；双击编辑此行'
-        pane.appendChild(line)
+    const preview = document.createElement('article')
+    preview.className = 'md-preview'
+    preview.innerHTML = this.previewRenderer.render(this.markdownText)
+    pane.appendChild(preview)
+    this.previewRenderer.afterRender(preview)
+    this.annotatePreviewBlocks(preview)
+    this.decoratePreviewImages(preview)
+    preview.addEventListener('click', event => this.onPreviewClick(event))
+    preview.addEventListener('dblclick', event => this.onPreviewDoubleClick(event))
+    this.applySearchHighlights(preview)
+    this.updateModeToolbar()
+  }
+
+  private annotatePreviewBlocks(preview: HTMLElement) {
+    for (const element of preview.querySelectorAll<HTMLElement>('[data-md-start-line]')) {
+      const startLine = Number(element.dataset.mdStartLine)
+      const endLine = Number(element.dataset.mdEndLine)
+      const [start, end] = this.sourceRangeForLines(startLine, endLine)
+      const sectionIndex = this.sections.findIndex(section => section.start >= start && section.start < end)
+      if (sectionIndex >= 0) element.dataset.idx = String(sectionIndex)
+      element.title = '单击定位 PDF；双击在原位置编辑'
+      element.tabIndex = 0
+    }
+  }
+
+  private onPreviewClick(event: MouseEvent) {
+    const target = event.target as HTMLElement
+    if (target.closest('button,a,input,textarea')) return
+    const block = target.closest<HTMLElement>('[data-md-start-line]')
+    if (!block) return
+    const sectionIndex = Number(block.dataset.idx)
+    const section = this.sections[sectionIndex]
+    if (section) this.onMdClick(section, sectionIndex, block)
+  }
+
+  private onPreviewDoubleClick(event: MouseEvent) {
+    const target = event.target as HTMLElement
+    if (target.closest('button,a,input,textarea')) return
+    const block = target.closest<HTMLElement>('[data-md-start-line]')
+    if (!block) return
+    event.preventDefault()
+    event.stopPropagation()
+    this.openInlineBlockEditor(block)
+  }
+
+  private openInlineBlockEditor(block: HTMLElement, replacementValue?: string) {
+    if (this.markdownText == null) return
+    const startLine = Number(block.dataset.mdStartLine)
+    const endLine = Number(block.dataset.mdEndLine)
+    const [start, end] = this.sourceRangeForLines(startLine, endLine)
+    const original = this.markdownText.slice(start, end)
+    const lineEnding = original.match(/\r?\n$/)?.[0] || ''
+    const initialValue = replacementValue ?? (lineEnding ? original.slice(0, -lineEnding.length) : original)
+    const editor = document.createElement('div')
+    editor.className = 'inline-editor'
+    const tools = document.createElement('div')
+    tools.className = 'inline-editor-tools'
+    const textarea = document.createElement('textarea')
+    textarea.value = initialValue
+    const definitions: Array<[string, string, string]> = [
+      ['标题', '## ', ''], ['B', '**', '**'], ['I', '*', '*'], ['S', '~~', '~~'], ['引用', '> ', ''], ['链接', '[', '](https://)'],
+    ]
+    for (const [label, prefix, suffix] of definitions) {
+      const button = document.createElement('button')
+      button.textContent = label
+      button.addEventListener('click', () => this.wrapEditorSelection(textarea, prefix, suffix))
+      tools.appendChild(button)
+    }
+    const spacer = document.createElement('span')
+    spacer.className = 'spacer'
+    const save = document.createElement('button')
+    save.textContent = '保存'
+    const cancel = document.createElement('button')
+    cancel.textContent = '取消'
+    tools.append(spacer, save, cancel)
+    editor.append(tools, textarea)
+    block.replaceWith(editor)
+    cancel.addEventListener('click', () => editor.replaceWith(block))
+    save.addEventListener('click', () => {
+      const replacement = textarea.value + lineEnding
+      if (replacementValue !== undefined && !textarea.value.trim()) {
+        alert('请输入替代文字；如果只想删除图片，请使用删除按钮。')
+        return
       }
+      this.replaceMarkdownRange(start, end, replacement, {
+        type: replacementValue !== undefined ? 'image-to-text' : 'edit-markdown',
+        detail: 'inline Markdown block edit',
+        timestamp: new Date().toISOString(),
+      })
+    })
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape') editor.replaceWith(block)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') save.click()
+    })
+    textarea.focus()
+    if (replacementValue !== undefined) textarea.select()
+  }
+
+  private decoratePreviewImages(preview: HTMLElement) {
+    for (const image of preview.querySelectorAll<HTMLImageElement>('img')) {
+      const source = image.getAttribute('src') || ''
+      const imagePath = normalizeAssetPath(source)
+      image.removeAttribute('src')
+      image.classList.add('md-asset')
+      image.dataset.assetPath = imagePath
+      image.alt ||= imagePath
+      this.observeRenderedImage(image)
+
+      const block = image.closest<HTMLElement>('[data-md-start-line]')
+      if (!block) continue
+      const startLine = Number(block.dataset.mdStartLine)
+      const endLine = Number(block.dataset.mdEndLine)
+      const [start, end] = this.sourceRangeForLines(startLine, endLine)
+      const section = this.sections.find(item => item.kind === 'image'
+        && item.start >= start && item.start < end
+        && normalizeAssetPath(item.imagePath || '') === imagePath)
+        || this.sections.find(item => item.kind === 'image' && item.start >= start && item.start < end)
+      if (!section) continue
+
+      const actions = document.createElement('div')
+      actions.className = 'preview-image-actions'
+      const replace = document.createElement('button')
+      replace.textContent = '替换图片'
+      replace.addEventListener('click', event => {
+        event.stopPropagation()
+        this.chooseReplacement(section)
+      })
+      const toText = document.createElement('button')
+      toText.textContent = '改为文字'
+      toText.addEventListener('click', event => {
+        event.stopPropagation()
+        this.openInlineBlockEditor(block, '')
+      })
+      const remove = document.createElement('button')
+      remove.className = 'danger'
+      remove.textContent = '从 Markdown 删除'
+      remove.addEventListener('click', event => {
+        event.stopPropagation()
+        this.removeImageReference(section)
+      })
+      actions.append(replace, toText, remove)
+      block.appendChild(actions)
     }
   }
 
-  private createImageCard(section: MdSection, index: number): HTMLElement {
-    const card = document.createElement('article')
-    card.className = 'image-card' + (section.bbox ? ' match' : ' no-match')
-    card.tabIndex = 0
-    card.dataset.idx = String(index)
-    card.dataset.imagePath = section.imagePath
-
-    const preview = document.createElement('div')
-    preview.className = 'image-preview'
-    preview.textContent = '加载图片…'
-    card.appendChild(preview)
-
-    const meta = document.createElement('div')
-    meta.className = 'image-meta'
-    const path = document.createElement('span')
-    path.className = 'image-path'
-    path.title = section.imagePath!
-    path.textContent = section.imagePath!
-    meta.appendChild(path)
-    if (section.bbox) {
-      const badge = document.createElement('span')
-      badge.className = 'badge'
-      badge.textContent = `p${section.page}`
-      meta.appendChild(badge)
-    }
-    card.appendChild(meta)
-
-    const actions = document.createElement('div')
-    actions.className = 'image-actions'
-    const replaceButton = document.createElement('button')
-    replaceButton.textContent = '替换图片'
-    replaceButton.addEventListener('click', event => {
-      event.stopPropagation()
-      this.chooseReplacement(section)
-    })
-    const toTextButton = document.createElement('button')
-    toTextButton.textContent = '改为文字'
-    toTextButton.addEventListener('click', event => {
-      event.stopPropagation()
-      this.openSectionEditor(section, true)
-    })
-    const removeButton = document.createElement('button')
-    removeButton.className = 'danger'
-    removeButton.textContent = '从 Markdown 删除'
-    removeButton.addEventListener('click', event => {
-      event.stopPropagation()
-      this.removeImageReference(section)
-    })
-    actions.append(replaceButton, toTextButton, removeButton)
-    card.appendChild(actions)
-
-    card.addEventListener('click', () => this.onMdClick(section, index, card))
-    this.observeImageCard(card)
-
-    return card
-  }
-
-  private observeImageCard(card: HTMLElement) {
+  private observeRenderedImage(image: HTMLImageElement) {
     if (typeof IntersectionObserver === 'undefined') {
-      void this.loadImageCard(card)
+      void this.loadRenderedImage(image)
       return
     }
     if (!this.imageObserver) {
@@ -775,40 +932,134 @@ export class MineruLayoutViewer extends HTMLElement {
       this.imageObserver = new IntersectionObserver(entries => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue
-          const target = entry.target as HTMLElement
+          const target = entry.target as HTMLImageElement
           this.imageObserver?.unobserve(target)
-          void this.loadImageCard(target)
+          void this.loadRenderedImage(target)
         }
       }, { root: pane, rootMargin: '600px 0px' })
     }
-    this.imageObserver.observe(card)
+    this.imageObserver.observe(image)
   }
 
-  private async loadImageCard(card: HTMLElement) {
-    const imagePath = card.dataset.imagePath
-    const preview = card.querySelector('.image-preview') as HTMLElement | null
-    if (!imagePath || !preview) return
+  private async loadRenderedImage(image: HTMLImageElement) {
+    const path = image.dataset.assetPath
+    if (!path) return
     try {
-      const url = await this.getAssetUrl(imagePath)
-      if (!card.isConnected) return
-      preview.textContent = ''
-      const image = document.createElement('img')
-      image.src = url
-      image.alt = imagePath
-      preview.appendChild(image)
+      image.src = await this.getAssetUrl(path)
     } catch (error) {
-      if (!card.isConnected) return
-      preview.textContent = ''
-      const message = document.createElement('div')
-      message.className = 'image-error'
-      message.textContent = error instanceof Error ? error.message : String(error)
-      preview.appendChild(message)
+      image.alt = error instanceof Error ? error.message : String(error)
+      image.classList.add('image-error')
     }
+  }
+
+  private sourceRangeForLines(startLine: number, endLine: number): [number, number] {
+    const markdown = this.markdownText || ''
+    const offsets = [0]
+    for (let index = 0; index < markdown.length; index++) {
+      if (markdown[index] === '\n') offsets.push(index + 1)
+    }
+    return [offsets[startLine] ?? markdown.length, offsets[endLine] ?? markdown.length]
+  }
+
+  private buildSourceEditor() {
+    const pane = this.shadowRoot?.getElementById('mdPane')
+    if (!pane) return
+    const value = this.sourceDraft
+    this.sourceEditor?.destroy()
+    pane.innerHTML = ''
+    const host = document.createElement('div')
+    host.className = 'source-editor-host'
+    pane.appendChild(host)
+    const plugins = [...this.markdownEditorPlugins]
+    if (this.vimEnabled && !plugins.some(plugin => plugin.name === 'vim')) plugins.push(createVimEditorPlugin())
+    this.sourceEditor = new MarkdownSourceEditor({
+      parent: host,
+      document: value,
+      plugins,
+      onChange: next => {
+        this.sourceDraft = next
+        const status = this.shadowRoot?.getElementById('sourceStatus')
+        if (status) status.textContent = next === this.markdownText ? '' : '未保存'
+      },
+    })
+    this.sourceEditor.view.dom.style.fontSize = `${Math.round(14 * this.markdownZoom)}px`
+    this.sourceDraft = value
+    this.updateModeToolbar()
+    this.sourceEditor.focus()
+  }
+
+  private switchToSourceMode() {
+    if (this.markdownText == null || this.markdownMode === 'source') return
+    this.markdownMode = 'source'
+    this.sourceDraft = this.markdownText
+    this.buildSourceEditor()
+    this.updateSearchResults()
+  }
+
+  private saveSourceAndPreview() {
+    if (this.markdownMode !== 'source') return
+    const next = this.sourceEditor?.getValue() ?? this.sourceDraft
+    const previousMarkdown = this.markdownText || ''
+    const previousSections = this.sections
+    if (next !== previousMarkdown) {
+      this.undoStack.push({ type: 'restore-markdown', markdown: previousMarkdown })
+      this.markdownText = next
+      this.reviewEdits.push({ type: 'edit-markdown', detail: 'edited full Markdown source', timestamp: new Date().toISOString() })
+      this.refreshSectionsPreservingMatches(previousSections)
+    }
+    this.sourceEditor?.destroy()
+    this.sourceEditor = null
+    this.markdownMode = 'preview'
+    this.sourceDraft = ''
+    this.buildMarkdownPreview()
+    this.updateOverlayStates()
+    this.updateToolbar()
+    this.updateSearchResults()
+  }
+
+  private cancelSourceMode() {
+    if (this.markdownMode !== 'source') return
+    this.sourceEditor?.destroy()
+    this.sourceEditor = null
+    this.markdownMode = 'preview'
+    this.sourceDraft = ''
+    this.buildMarkdownPreview()
+    this.updateSearchResults()
+  }
+
+  private toggleVimMode() {
+    this.vimEnabled = !this.vimEnabled
+    if (this.markdownMode === 'source') {
+      this.sourceDraft = this.sourceEditor?.getValue() ?? this.sourceDraft
+      this.buildSourceEditor()
+    }
+    this.updateModeToolbar()
+  }
+
+  private updateModeToolbar() {
+    const shadow = this.shadowRoot
+    if (!shadow) return
+    shadow.getElementById('mdPreviewMode')?.classList.toggle('active', this.markdownMode === 'preview')
+    shadow.getElementById('mdSourceMode')?.classList.toggle('active', this.markdownMode === 'source')
+    const vimButton = shadow.getElementById('vimToggle')
+    if (vimButton) vimButton.textContent = `Vim：${this.vimEnabled ? '开' : '关'}`
+    ;(shadow.getElementById('sourceSave') as HTMLButtonElement | null)?.toggleAttribute('hidden', this.markdownMode !== 'source')
+    ;(shadow.getElementById('sourceCancel') as HTMLButtonElement | null)?.toggleAttribute('hidden', this.markdownMode !== 'source')
+    const status = shadow.getElementById('sourceStatus')
+    if (status && this.markdownMode === 'preview') status.textContent = ''
+    const undo = shadow.getElementById('undo') as HTMLButtonElement | null
+    if (undo) undo.disabled = this.undoStack.length === 0 || this.markdownMode === 'source'
+  }
+
+  private updatePluginStyles() {
+    const style = this.shadowRoot?.getElementById('markdownPluginStyles')
+    if (style) style.textContent = this.previewRenderer.styles()
   }
 
   private onMdClick(section: MdSection, index: number, element: HTMLElement) {
     const shadow = this.shadowRoot!
-    shadow.querySelectorAll('.active').forEach(item => item.classList.remove('active'))
+    shadow.querySelectorAll('.block-overlay.active,.md-preview .active')
+      .forEach(item => item.classList.remove('active'))
     element.classList.add('active')
     this.activeIdx = index
     if (!section.bbox) return
@@ -828,7 +1079,8 @@ export class MineruLayoutViewer extends HTMLElement {
 
   private onBlockClick(block: PdfBlock, overlay: HTMLElement) {
     const shadow = this.shadowRoot!
-    shadow.querySelectorAll('.active').forEach(item => item.classList.remove('active'))
+    shadow.querySelectorAll('.block-overlay.active,.md-preview .active')
+      .forEach(item => item.classList.remove('active'))
     overlay.classList.add('active')
 
     let bestIndex = this.sections.findIndex(section => section.blockId === block.id)
@@ -852,6 +1104,11 @@ export class MineruLayoutViewer extends HTMLElement {
 
     if (bestIndex >= 0) {
       this.activeIdx = bestIndex
+      if (this.markdownMode === 'source' && this.sourceEditor) {
+        const section = this.sections[bestIndex]
+        this.sourceEditor.goTo(section.start, Math.max(0, section.end - section.start))
+        return
+      }
       const element = shadow.querySelector(`[data-idx="${bestIndex}"]`) as HTMLElement | null
       if (element) {
         element.classList.add('active')
@@ -907,119 +1164,6 @@ export class MineruLayoutViewer extends HTMLElement {
       imagePath: section.imagePath,
       timestamp: new Date().toISOString(),
     })
-  }
-
-  private openSectionEditor(section: MdSection, imageToText: boolean) {
-    this.showEditor({
-      title: imageToText ? '将图片改为文字' : '编辑 Markdown 行',
-      value: imageToText ? '' : section.raw,
-      placeholder: imageToText ? '输入用来替代这张图片的文字或 Markdown…' : '',
-      full: false,
-      onSave: value => {
-        if (imageToText && !value.trim()) {
-          alert('请输入替代文字；如果只想删除图片，请使用“从 Markdown 删除”。')
-          return false
-        }
-        const source = this.markdownText?.slice(section.start, section.end) || ''
-        const newline = source.match(/\r?\n$/)?.[0] || ''
-        this.replaceMarkdownRange(section.start, section.end, value + newline, {
-          type: imageToText ? 'image-to-text' : 'edit-markdown',
-          imagePath: imageToText ? section.imagePath : undefined,
-          detail: imageToText ? value.slice(0, 120) : 'edited one Markdown line',
-          timestamp: new Date().toISOString(),
-        })
-        return true
-      },
-    })
-  }
-
-  private openMarkdownEditor() {
-    if (this.markdownText == null) return
-    this.showEditor({
-      title: '全文 Markdown 编辑',
-      value: this.markdownText,
-      full: true,
-      onSave: value => {
-        if (value === this.markdownText) return true
-        this.replaceMarkdownRange(0, this.markdownText!.length, value, {
-          type: 'edit-markdown',
-          detail: 'edited full Markdown source',
-          timestamp: new Date().toISOString(),
-        })
-        return true
-      },
-    })
-  }
-
-  private showEditor(options: {
-    title: string
-    value: string
-    placeholder?: string
-    full: boolean
-    onSave: (value: string) => boolean
-  }) {
-    const shadow = this.shadowRoot
-    if (!shadow) return
-    shadow.querySelector('.editor-backdrop')?.remove()
-
-    const backdrop = document.createElement('div')
-    backdrop.className = 'editor-backdrop'
-    const dialog = document.createElement('section')
-    dialog.className = 'editor-dialog' + (options.full ? ' full' : '')
-    const title = document.createElement('div')
-    title.className = 'editor-title'
-    title.textContent = options.title
-    const tools = document.createElement('div')
-    tools.className = 'editor-tools'
-    const textarea = document.createElement('textarea')
-    textarea.className = 'editor-area'
-    textarea.value = options.value
-    textarea.placeholder = options.placeholder || ''
-
-    const toolDefinitions: Array<[string, string, string]> = [
-      ['CODE', '', ''], ['标题', '## ', ''], ['B', '**', '**'], ['I', '*', '*'], ['S', '~~', '~~'], ['引用', '> ', ''], ['链接', '[', '](https://)'],
-    ]
-    for (const [label, prefix, suffix] of toolDefinitions) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.textContent = label
-      if (label === 'CODE') {
-        button.className = 'code-tab'
-        button.disabled = true
-      } else {
-        button.addEventListener('click', () => this.wrapEditorSelection(textarea, prefix, suffix))
-      }
-      tools.appendChild(button)
-    }
-
-    const actions = document.createElement('div')
-    actions.className = 'editor-actions'
-    const cancel = document.createElement('button')
-    cancel.textContent = '取消'
-    const save = document.createElement('button')
-    save.className = 'save'
-    save.textContent = '保存'
-    const close = () => backdrop.remove()
-    cancel.addEventListener('click', close)
-    save.addEventListener('click', () => {
-      if (options.onSave(textarea.value)) close()
-    })
-    actions.append(save, cancel)
-    dialog.append(title, tools, textarea, actions)
-    backdrop.appendChild(dialog)
-    backdrop.addEventListener('click', event => {
-      if (event.target === backdrop) close()
-    })
-    textarea.addEventListener('keydown', event => {
-      if (event.key === 'Escape') close()
-      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault()
-        save.click()
-      }
-    })
-    shadow.appendChild(backdrop)
-    textarea.focus()
-    if (!options.full) textarea.select()
   }
 
   private wrapEditorSelection(textarea: HTMLTextAreaElement, prefix: string, suffix: string) {
@@ -1089,36 +1233,18 @@ export class MineruLayoutViewer extends HTMLElement {
   private toggleFindBar(open: boolean) {
     const bar = this.shadowRoot?.getElementById('findBar')
     bar?.classList.toggle('open', open)
-    if (open) (this.shadowRoot?.getElementById('findText') as HTMLInputElement | null)?.focus()
+    if (open) {
+      this.updateSearchResults()
+      ;(this.shadowRoot?.getElementById('findText') as HTMLInputElement | null)?.focus()
+    }
   }
 
   private findNext() {
-    const markdown = this.markdownText || ''
-    const input = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
-    const query = input?.value || ''
-    if (!query) return this.setFindResult('请输入内容')
-    const source = markdown.toLocaleLowerCase()
-    const needle = query.toLocaleLowerCase()
-    let index = source.indexOf(needle, this.findCursor)
-    if (index < 0 && this.findCursor > 0) index = source.indexOf(needle)
-    if (index < 0) {
-      this.currentFindStart = -1
-      return this.setFindResult('未找到')
-    }
-    this.currentFindStart = index
-    this.findCursor = index + Math.max(query.length, 1)
-    const sectionIndex = this.sections.findIndex(section => section.start <= index && section.end > index)
-    const element = sectionIndex >= 0
-      ? this.shadowRoot?.querySelector(`[data-idx="${sectionIndex}"]`) as HTMLElement | null
-      : null
-    if (element) {
-      this.shadowRoot?.querySelectorAll('.active').forEach(item => item.classList.remove('active'))
-      element.classList.add('active')
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-    const total = source.split(needle).length - 1
-    const ordinal = source.slice(0, index).split(needle).length
-    this.setFindResult(`${ordinal}/${total}`)
+    if (!this.searchResults.length) this.updateSearchResults()
+    if (!this.searchResults.length) return
+    let index = this.searchResults.findIndex(result => result.start >= this.findCursor)
+    if (index < 0) index = 0
+    this.goToSearchResult(index)
   }
 
   private replaceCurrentMatch() {
@@ -1126,25 +1252,32 @@ export class MineruLayoutViewer extends HTMLElement {
     const replaceInput = this.shadowRoot?.getElementById('replaceText') as HTMLInputElement | null
     const query = findInput?.value || ''
     if (!query) return this.setFindResult('请输入内容')
+    const currentDocument = this.currentMarkdownDocument()
     if (this.currentFindStart < 0
-      || this.markdownText?.slice(this.currentFindStart, this.currentFindStart + query.length).toLocaleLowerCase() !== query.toLocaleLowerCase()) {
+      || currentDocument.slice(this.currentFindStart, this.currentFindStart + query.length).toLocaleLowerCase() !== query.toLocaleLowerCase()) {
       this.findNext()
       if (this.currentFindStart < 0) return
     }
     const start = this.currentFindStart
     const replacement = replaceInput?.value || ''
-    this.replaceMarkdownRange(start, start + query.length, replacement, {
-      type: 'replace-text',
-      detail: `replace one: ${query}`,
-      timestamp: new Date().toISOString(),
-    })
+    if (this.markdownMode === 'source' && this.sourceEditor) {
+      this.sourceEditor.view.dispatch({ changes: { from: start, to: start + query.length, insert: replacement } })
+      this.sourceDraft = this.sourceEditor.getValue()
+    } else {
+      this.replaceMarkdownRange(start, start + query.length, replacement, {
+        type: 'replace-text',
+        detail: `replace one: ${query}`,
+        timestamp: new Date().toISOString(),
+      })
+    }
     this.findCursor = start + replacement.length
     this.currentFindStart = -1
+    this.updateSearchResults()
     this.findNext()
   }
 
   private replaceAllMatches() {
-    if (this.markdownText == null) return
+    if (this.markdownText == null && !this.sourceEditor) return
     const findInput = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
     const replaceInput = this.shadowRoot?.getElementById('replaceText') as HTMLInputElement | null
     const query = findInput?.value || ''
@@ -1152,19 +1285,143 @@ export class MineruLayoutViewer extends HTMLElement {
     const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
     let count = 0
     const replacement = replaceInput?.value || ''
-    const next = this.markdownText.replace(expression, () => {
+    const currentDocument = this.currentMarkdownDocument()
+    const next = currentDocument.replace(expression, () => {
       count++
       return replacement
     })
     if (!count) return this.setFindResult('未找到')
-    this.replaceMarkdownRange(0, this.markdownText.length, next, {
-      type: 'replace-text',
-      detail: `replace all ${count}: ${query}`,
-      timestamp: new Date().toISOString(),
-    })
+    if (this.markdownMode === 'source' && this.sourceEditor) {
+      this.sourceEditor.view.dispatch({ changes: { from: 0, to: currentDocument.length, insert: next } })
+      this.sourceDraft = next
+    } else {
+      this.replaceMarkdownRange(0, currentDocument.length, next, {
+        type: 'replace-text',
+        detail: `replace all ${count}: ${query}`,
+        timestamp: new Date().toISOString(),
+      })
+    }
     this.currentFindStart = -1
     this.findCursor = 0
+    this.updateSearchResults()
     this.setFindResult(`已替换 ${count} 处`)
+  }
+
+  private updateSearchResults() {
+    const container = this.shadowRoot?.getElementById('findResults')
+    const input = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
+    if (!container || !input) return
+    const query = input.value
+    container.innerHTML = ''
+    this.searchResults = []
+    if (!query) {
+      this.setFindResult('')
+      this.clearSearchHighlights()
+      return
+    }
+
+    const documentText = this.currentMarkdownDocument()
+    const source = documentText.toLocaleLowerCase()
+    const needle = query.toLocaleLowerCase()
+    let cursor = 0
+    while (cursor <= source.length - needle.length && this.searchResults.length < 1000) {
+      const start = source.indexOf(needle, cursor)
+      if (start < 0) break
+      const end = start + query.length
+      const sectionIndex = this.sections.findIndex(section => section.start <= start && section.end > start)
+      const lineStart = documentText.lastIndexOf('\n', start - 1) + 1
+      const nextLine = documentText.indexOf('\n', end)
+      const lineEnd = nextLine < 0 ? documentText.length : nextLine
+      const snippet = documentText.slice(lineStart, lineEnd).trim().replace(/\s+/g, ' ')
+      this.searchResults.push({ start, end, sectionIndex, snippet })
+      cursor = Math.max(end, start + 1)
+    }
+
+    this.searchResults.forEach((result, index) => {
+      const button = document.createElement('button')
+      button.className = 'find-result-item'
+      const section = this.sections[result.sectionIndex]
+      button.textContent = `${index + 1}. ${section?.page ? `p${section.page} · ` : ''}${result.snippet}`
+      button.title = result.snippet
+      button.addEventListener('click', () => this.goToSearchResult(index))
+      container.appendChild(button)
+    })
+    this.setFindResult(`${this.searchResults.length} 处`)
+    this.applySearchHighlights()
+  }
+
+  private goToSearchResult(index: number) {
+    const result = this.searchResults[index]
+    if (!result) return
+    this.currentFindStart = result.start
+    this.findCursor = result.end
+    this.shadowRoot?.querySelectorAll('.find-result-item').forEach((item, itemIndex) => {
+      item.classList.toggle('active', itemIndex === index)
+    })
+    if (this.markdownMode === 'source' && this.sourceEditor) {
+      this.sourceEditor.goTo(result.start, result.end - result.start)
+    } else {
+      const element = this.shadowRoot?.querySelector(`[data-idx="${result.sectionIndex}"]`) as HTMLElement | null
+      if (element) {
+        this.shadowRoot?.querySelectorAll('.md-preview .active').forEach(item => item.classList.remove('active'))
+        element.classList.add('active')
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      const section = this.sections[result.sectionIndex]
+      if (section && element) this.onMdClick(section, result.sectionIndex, element)
+    }
+    this.setFindResult(`${index + 1}/${this.searchResults.length}`)
+  }
+
+  private currentMarkdownDocument(): string {
+    return this.markdownMode === 'source'
+      ? this.sourceEditor?.getValue() ?? this.sourceDraft
+      : this.markdownText || ''
+  }
+
+  private clearSearchHighlights() {
+    const preview = this.shadowRoot?.querySelector('.md-preview')
+    if (!preview) return
+    preview.querySelectorAll('mark.search-hit').forEach(mark => mark.replaceWith(document.createTextNode(mark.textContent || '')))
+    preview.normalize()
+  }
+
+  private applySearchHighlights(root?: HTMLElement) {
+    const preview = root || this.shadowRoot?.querySelector<HTMLElement>('.md-preview')
+    if (!preview) return
+    this.clearSearchHighlights()
+    const input = this.shadowRoot?.getElementById('findText') as HTMLInputElement | null
+    const query = input?.value || ''
+    if (!query) return
+    const needle = query.toLocaleLowerCase()
+    const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT)
+    const nodes: Text[] = []
+    let node: Node | null
+    while ((node = walker.nextNode())) {
+      const parent = node.parentElement
+      if (!parent || parent.closest('button,textarea,mark,.preview-image-actions')) continue
+      if ((node.textContent || '').toLocaleLowerCase().includes(needle)) nodes.push(node as Text)
+    }
+    for (const textNode of nodes) {
+      const text = textNode.data
+      const lower = text.toLocaleLowerCase()
+      const fragment = document.createDocumentFragment()
+      let cursor = 0
+      while (cursor < text.length) {
+        const match = lower.indexOf(needle, cursor)
+        if (match < 0) {
+          fragment.append(text.slice(cursor))
+          break
+        }
+        if (match > cursor) fragment.append(text.slice(cursor, match))
+        const mark = document.createElement('mark')
+        mark.className = 'search-hit'
+        mark.textContent = text.slice(match, match + query.length)
+        fragment.append(mark)
+        cursor = match + query.length
+      }
+      textNode.replaceWith(fragment)
+    }
   }
 
   private setFindResult(message: string) {
@@ -1234,6 +1491,10 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   private resetReviewState() {
+    this.sourceEditor?.destroy()
+    this.sourceEditor = null
+    this.markdownMode = 'preview'
+    this.sourceDraft = ''
     this.pdfPageObserver?.disconnect()
     this.pdfPageObserver = null
     void this.pdfDocument?.destroy()

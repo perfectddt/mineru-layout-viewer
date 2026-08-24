@@ -9,6 +9,7 @@ const {
   parseBlocks,
   parseMarkdownSections,
   matchMarkdownToPdf,
+  MarkdownPreviewRenderer,
 } = await import('../dist/index.mjs')
 
 test('content_list images keep paths and normalize 0..1000 bbox values', () => {
@@ -67,4 +68,25 @@ test('Markdown image lines preserve offsets and match blocks by image path', () 
   assert.equal(removed.includes('figure-1.jpg'), false)
   assert.equal(removed.includes('# Introduction'), true)
   assert.equal(removed.includes('End'), true)
+})
+
+test('Markdown preview renders formatting with source-line annotations and safe HTML defaults', () => {
+  const renderer = new MarkdownPreviewRenderer()
+  const html = renderer.render('# Heading\n\n**bold** and <script>alert(1)</script>\n')
+
+  assert.match(html, /<h1[^>]*data-md-start-line="0"/)
+  assert.match(html, /<strong>bold<\/strong>/)
+  assert.doesNotMatch(html, /<script>/)
+  assert.match(html, /&lt;script&gt;/)
+})
+
+test('Markdown preview plugins can configure rendering and provide scoped styles', () => {
+  const renderer = new MarkdownPreviewRenderer([{
+    name: 'line-breaks',
+    styles: '.md-preview { color: rebeccapurple; }',
+    configure(markdownIt) { markdownIt.set({ breaks: true }) },
+  }])
+
+  assert.match(renderer.render('first\nsecond'), /first<br>\nsecond/)
+  assert.match(renderer.styles(), /rebeccapurple/)
 })

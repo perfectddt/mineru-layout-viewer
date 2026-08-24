@@ -31,11 +31,13 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Zip support** — drop a MinerU output `.zip` directly, auto-extracts PDF + layout + markdown
 - **Folder support** — select an uncompressed MinerU result directory directly (no ZIP required)
 - **Large PDF support** — shows loading progress and renders PDF pages only near the viewport
-- **Image review cards** — render image assets from the ZIP and map them to PDF image blocks by path
+- **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
 - **Replace / soft-delete / undo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
-- **Editable Markdown review** — double-click a text line, convert an image to text, or edit the full Markdown source
-- **Find and replace** — find next, replace one, or replace all without losing PDF mapping
+- **Typora-style editing flow** — preview by default; double-click a rendered block to edit it in place
+- **Full source + Vim mode** — CodeMirror 6 fills the right pane, with an optional Vim keybinding plugin
+- **Plugin APIs** — extend Markdown-it rendering/styles and CodeMirror editor extensions
+- **Find result navigator** — red preview highlights plus a clickable result list, replace-one, and replace-all
 - **Independent zoom** — PDF fit-page/fit-width/custom zoom and separate Markdown/image zoom
 - **Persistent layout boxes** — text, image, and removed/unreferenced image boxes use distinct always-visible colors
 - **Edited ZIP export** — download a new ZIP with edited Markdown, replacement assets, and `review_edits.json`
@@ -163,6 +165,16 @@ interface MdSection {
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
 | `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
 | `exportEditedZip(): Promise<void>`       | Download the edited result ZIP         |
+| `registerMarkdownRenderPlugin(plugin)`   | Add Markdown-it rules, preview styles, or post-render hooks |
+| `registerMarkdownEditorPlugin(plugin)`   | Add a CodeMirror 6 editor extension     |
+
+```js
+viewer.registerMarkdownRenderPlugin({
+  name: 'review-heading-theme',
+  styles: '.md-preview h2 { color:#0f766e; border-color:#5eead4; }',
+  configure(markdownIt) { markdownIt.set({ breaks: true }) },
+})
+```
 
 ### Image edit semantics
 
@@ -215,11 +227,13 @@ MIT
 - **嵌套块解析** — 将列表项、表格单元格等嵌套块解析到叶子节点坐标
 - **框架无关** — 基于 Web Component，支持 React、Vue 或原生 HTML
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
-- **图片审核卡片** — 显示 ZIP 内的真实图片，并通过图片路径与 PDF 图片框精确关联
+- **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
-- **Markdown 审校编辑** — 双击文字行编辑、把图片改为文字，或打开全文源码编辑
-- **查找替换** — 支持查找下一处、替换当前和全部替换，同时保留 PDF 映射
+- **类 Typora 编辑流程** — 默认预览，双击渲染块后直接在原位置编辑
+- **全文源码与 Vim** — CodeMirror 6 直接占据右栏，并支持可开关的 Vim 键位插件
+- **插件接口** — 可扩展 Markdown-it 渲染规则/样式和 CodeMirror 编辑扩展
+- **搜索结果导航** — 预览内红色高亮，并提供可点击跳转的结果列表、单项替换和全部替换
 - **左右独立缩放** — PDF 支持整页、页宽和自定义缩放，Markdown 与图片可单独缩放
 - **框常显与状态配色** — 文字、图片、已删除或未引用图片使用不同颜色且始终可见
 - **导出修改版 ZIP** — 导出修改后的 Markdown、图片以及 `review_edits.json` 操作记录
@@ -347,6 +361,16 @@ interface MdSection {
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
 | `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
 | `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
+| `registerMarkdownRenderPlugin(plugin)`   | 注册 Markdown-it 规则、预览样式或渲染后钩子 |
+| `registerMarkdownEditorPlugin(plugin)`   | 注册 CodeMirror 6 编辑扩展   |
+
+```js
+viewer.registerMarkdownRenderPlugin({
+  name: 'review-heading-theme',
+  styles: '.md-preview h2 { color:#0f766e; border-color:#5eead4; }',
+  configure(markdownIt) { markdownIt.set({ breaks: true }) },
+})
+```
 
 ### 图片修改规则
 
