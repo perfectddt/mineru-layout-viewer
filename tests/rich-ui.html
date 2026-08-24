@@ -4,6 +4,7 @@
 <style>html,body,mineru-layout-viewer{height:100%;margin:0;display:block}</style>
 <mineru-layout-viewer id="viewer"></mineru-layout-viewer>
 <input id="folderFixture" type="file" webkitdirectory multiple hidden>
+<input id="markdownFixture" type="file" accept=".md" hidden>
 <script type="module">
   let markdown = `# 富 Markdown 验收
 
@@ -35,5 +36,16 @@
     { type:'image', img_path:'images/not-found.png', page_idx:0, bbox:[100,200,900,700] }
   ]))
   await viewer.loadMarkdown(markdown)
+  if (new URLSearchParams(location.search).has('standalone')) {
+    const source = await fetch('../README.md').then(response => response.text())
+    await viewer.loadMarkdownFile(new File([source], 'README.md', { type: 'text/markdown' }))
+  }
+  if (new URLSearchParams(location.search).has('directory')) {
+    await viewer.loadDirectoryEntries([
+      { path: 'sample/full.md', file: new File(['# 目录拖放测试\n\n正文'], 'full.md', { type: 'text/markdown' }) },
+      { path: 'sample/content_list.json', file: new File([JSON.stringify([{ type:'text', text:'目录拖放测试', page_idx:0, bbox:[0,0,1000,200] }])], 'content_list.json', { type:'application/json' }) },
+    ])
+  }
   folderFixture.addEventListener('change', () => viewer.loadDirectory(folderFixture.files))
+  markdownFixture.addEventListener('change', () => viewer.loadMarkdownFile(markdownFixture.files[0]))
 </script>

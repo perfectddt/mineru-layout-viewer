@@ -30,10 +30,14 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Framework-agnostic** — built as a Web Component, works with React, Vue, or plain HTML
 - **Zip support** — drop a MinerU output `.zip` directly, auto-extracts PDF + layout + markdown
 - **Folder support** — select an uncompressed MinerU result directory directly (no ZIP required)
-- **Large PDF support** — shows loading progress and renders PDF pages only near the viewport
+- **Folder drag/drop** — recursively opens modern directory handles with a legacy WebKit fallback
+- **Progress + ETA** — shows the active load stage, percentage, and estimated remaining time when measurable
+- **Swappable panes + outlines** — swap PDF/Markdown sides; browse PDF bookmarks and Markdown headings
+- **Standalone Markdown editor** — preview-only reading mode, plus side-by-side CodeMirror and live rendered preview in `code` mode
+- **Large PDF support** — renders PDF pages only near the viewport
 - **Rendered Markdown preview** — CommonMark formatting, tables, lists, quotes, code blocks, links, and lazy-loaded images
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
-- **Replace / soft-delete / undo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
+- **Replace / soft-delete / undo/redo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
 - **Typora-style editing flow** — preview by default; double-click a rendered block to edit it in place
 - **Full source + Vim mode** — CodeMirror 6 fills the right pane, with an optional Vim keybinding plugin
 - **Plugin APIs** — extend Markdown-it rendering/styles and CodeMirror editor extensions
@@ -162,9 +166,12 @@ interface MdSection {
 | `loadZip(blob: Blob): Promise<void>`    | Load from a MinerU export .zip        |
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | Load an uncompressed MinerU result folder |
 | `loadDirectoryHandle(handle): Promise<void>` | Load a folder with read/write permission |
+| `loadDirectoryEntries(entries): Promise<void>` | Load recursively collected drag/drop files and paths |
+| `loadMarkdownFile(file, handle?): Promise<void>` | Open one Markdown file in standalone editor mode |
 | `loadLayoutFromJson(data: object\|string)`| Load layout JSON directly           |
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
 | `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
+| `redoLastEdit(): Promise<void>`          | Redo the most recently undone edit     |
 | `exportEditedZip(): Promise<void>`       | Download the edited result ZIP         |
 | `registerMarkdownRenderPlugin(plugin)`   | Add Markdown-it rules, preview styles, or post-render hooks |
 | `registerMarkdownEditorPlugin(plugin)`   | Add a CodeMirror 6 editor extension     |
@@ -235,9 +242,13 @@ MIT
 - **嵌套块解析** — 将列表项、表格单元格等嵌套块解析到叶子节点坐标
 - **框架无关** — 基于 Web Component，支持 React、Vue 或原生 HTML
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
+- **文件夹直拖** — 支持现代目录句柄，并提供旧版 WebKit 目录递归读取后备方案
+- **动态进度** — 显示载入阶段、百分比，以及在可计算阶段的预计剩余时间
+- **左右交换与目录** — PDF/Markdown 可交换位置；PDF 提供书签，Markdown 提供标题大纲
+- **单 Markdown 编辑器** — 预览模式仅保留一个阅读窗格，`code` 模式左右同时显示源码和实时渲染
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
-- **替换、软删除、撤销** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
+- **替换、软删除、撤销/重做** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
 - **类 Typora 编辑流程** — 默认预览，双击渲染块后直接在原位置编辑
 - **全文源码与 Vim** — CodeMirror 6 直接占据右栏，并支持可开关的 Vim 键位插件
 - **插件接口** — 可扩展 Markdown-it 渲染规则/样式和 CodeMirror 编辑扩展
@@ -366,9 +377,12 @@ interface MdSection {
 | `loadZip(blob: Blob): Promise<void>`    | 从 Mineru 导出 .zip 加载    |
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | 直接加载未压缩的 MinerU 结果文件夹 |
 | `loadDirectoryHandle(handle): Promise<void>` | 以可读写权限打开结果文件夹 |
+| `loadDirectoryEntries(entries): Promise<void>` | 加载目录拖放递归收集的文件和路径 |
+| `loadMarkdownFile(file, handle?): Promise<void>` | 以独立 Markdown 编辑器模式打开单文件 |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
 | `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
+| `redoLastEdit(): Promise<void>`          | 重做最近撤销的修改          |
 | `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
 | `registerMarkdownRenderPlugin(plugin)`   | 注册 Markdown-it 规则、预览样式或渲染后钩子 |
 | `registerMarkdownEditorPlugin(plugin)`   | 注册 CodeMirror 6 编辑扩展   |

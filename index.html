@@ -31,11 +31,12 @@ body { height: 100vh; font-family: system-ui, sans-serif; }
 <div id="dropZone" class="drop-zone">
   <div class="hint">
     <h3>MinerU 图片审核编辑器</h3>
-    <p>拖放 MinerU 导出 ZIP，或直接选择 MinerU 结果文件夹</p>
+    <p>拖放 MinerU 导出 ZIP、结果文件夹或单个 Markdown 文件</p>
     <p>支持图片定位、替换、软删除、撤销和导出修改版 ZIP</p>
     <div class="choices">
       <button id="chooseZip" class="primary" type="button">选择 ZIP</button>
       <button id="chooseFolder" type="button">选择结果文件夹</button>
+      <button id="chooseMarkdown" type="button">选择 Markdown</button>
     </div>
     <p id="loadStatus" class="load-status"></p>
     <p style="font-size:11px;margin-top:12px">
@@ -94,6 +95,30 @@ document.getElementById('chooseFolder').addEventListener('click', async e => {
   input.click()
 })
 
+document.getElementById('chooseMarkdown').addEventListener('click', async e => {
+  e.stopPropagation()
+  if ('showOpenFilePicker' in window) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        id: 'markdown-file',
+        multiple: false,
+        types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown'] } }],
+      })
+      const file = await handle.getFile()
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadMarkdownFile(file, handle)
+      return
+    } catch (error) {
+      if (error?.name === 'AbortError') return
+      console.warn('可写 Markdown 选择不可用，回退到只读选择', error)
+    }
+  }
+  const input = document.createElement('input')
+  input.type = 'file'; input.accept = '.md,.markdown,text/markdown'
+  input.onchange = () => handleFiles([...input.files])
+  input.click()
+})
+
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over') })
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'))
 dropZone.addEventListener('click', () => {
@@ -105,8 +130,59 @@ dropZone.addEventListener('click', () => {
 
 dropZone.addEventListener('drop', async e => {
   e.preventDefault(); dropZone.classList.remove('drag-over')
-  await handleFiles([...e.dataTransfer.files])
+  try {
+    const handles = []
+    for (const item of e.dataTransfer.items || []) {
+      if (item.kind !== 'file' || !item.getAsFileSystemHandle) continue
+      const handle = await item.getAsFileSystemHandle()
+      if (handle) handles.push(handle)
+    }
+    const directory = handles.find(handle => handle.kind === 'directory')
+    if (directory) {
+      const writable = directory.requestPermission
+        ? await directory.requestPermission({ mode: 'readwrite' }) === 'granted'
+        : false
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadDirectoryHandle(directory, writable)
+      return
+    }
+    const markdownHandle = handles.find(handle => handle.kind === 'file' && /\.(?:md|markdown)$/i.test(handle.name))
+    if (markdownHandle) {
+      const file = await markdownHandle.getFile()
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadMarkdownFile(file, markdownHandle)
+      return
+    }
+    const legacyDirectory = [...e.dataTransfer.items]
+      .map(item => item.webkitGetAsEntry?.())
+      .find(entry => entry?.isDirectory)
+    if (legacyDirectory) {
+      const entries = []
+      await collectLegacyDirectory(legacyDirectory, entries)
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadDirectoryEntries(entries)
+      return
+    }
+    await handleFiles([...e.dataTransfer.files])
+  } catch (error) {
+    viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
+    alert(error instanceof Error ? error.message : String(error))
+  }
 })
+
+async function collectLegacyDirectory(entry, output) {
+  const readBatch = reader => new Promise((resolve, reject) => reader.readEntries(resolve, reject))
+  const readFile = fileEntry => new Promise((resolve, reject) => fileEntry.file(resolve, reject))
+  const reader = entry.createReader()
+  while (true) {
+    const children = await readBatch(reader)
+    if (!children.length) break
+    for (const child of children) {
+      if (child.isDirectory) await collectLegacyDirectory(child, output)
+      else if (child.isFile) output.push({ path: child.fullPath.replace(/^\//, ''), file: await readFile(child) })
+    }
+  }
+}
 
 async function handleFiles(files) {
   try {
@@ -115,6 +191,12 @@ async function handleFiles(files) {
       loadStatus.textContent = `正在打开 ${zip.name}（大文件请留意上方加载进度）`
       dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
       await viewer.loadZip(zip)
+      return
+    }
+    const markdownFile = files.find(f => /\.(?:md|markdown)$/i.test(f.name))
+    if (markdownFile && files.length === 1) {
+      dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+      await viewer.loadMarkdownFile(markdownFile)
       return
     }
     let pdfFile, jsonFile
