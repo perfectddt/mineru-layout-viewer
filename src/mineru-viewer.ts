@@ -1807,7 +1807,7 @@ export class MineruLayoutViewer extends HTMLElement {
       element.dataset.mdStartLine = String(range[0])
       element.dataset.mdEndLine = String(range[1])
     })
-    Array.from(preview.querySelectorAll<HTMLElement>(':scope > table')).forEach((element, index) => {
+    Array.from(preview.querySelectorAll<HTMLElement>('table')).forEach((element, index) => {
       const range = tableRanges[index]
       if (!range) return
       element.dataset.mdStartLine = String(range[0])
@@ -1849,7 +1849,10 @@ export class MineruLayoutViewer extends HTMLElement {
     if (this.markdownMode === 'live') return
     const target = event.target as HTMLElement
     if (target.closest('button,a,input,textarea')) return
-    const block = target.closest<HTMLElement>('[data-md-start-line]')
+    // Markdown-it also annotates table rows. Always edit the whole table so
+    // replacing the rendered block remains valid HTML and covers every row.
+    const block = target.closest<HTMLElement>('table[data-md-start-line]')
+      || target.closest<HTMLElement>('[data-md-start-line]')
     if (!block) return
     event.preventDefault()
     event.stopPropagation()
@@ -1859,8 +1862,15 @@ export class MineruLayoutViewer extends HTMLElement {
   /** Make rendered blocks themselves editable; no textarea or save dialog is involved. */
   private enableLivePreviewEditing(preview: HTMLElement) {
     const editableTags = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'BLOCKQUOTE', 'PRE', 'UL', 'OL', 'TABLE', 'SECTION'])
-    for (const element of Array.from(preview.children) as HTMLElement[]) {
+    const candidates = Array.from(preview.children) as HTMLElement[]
+    for (const table of preview.querySelectorAll<HTMLElement>('table[data-md-start-line]')) {
+      if (!candidates.includes(table)) candidates.push(table)
+    }
+    for (const element of candidates) {
       if (!editableTags.has(element.tagName)) continue
+      // A nested table owns its complete source range. Do not let an outer
+      // Org section become a competing editable region for the same click.
+      if (element.tagName === 'SECTION' && element.querySelector('table[data-md-start-line]')) continue
       if (!element.hasAttribute('data-md-start-line')) {
         const annotatedChild = element.querySelector<HTMLElement>('[data-md-start-line]')
         if (annotatedChild) {
