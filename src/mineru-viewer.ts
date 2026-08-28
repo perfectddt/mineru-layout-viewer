@@ -61,6 +61,7 @@ interface LiveEditSession {
   originalDocument: string
   originalSections: MdSection[]
   changed: boolean
+  kind?: 'block' | 'table-cell'
 }
 
 type OutlineLayout = 'side' | 'stack'
@@ -246,6 +247,7 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .live-preview-mode ul.live-source-active,.live-preview-mode ol.live-source-active { padding-left:1.8em; }
 .live-preview-mode table.live-source-active td { white-space:pre-wrap; }
 .live-preview-mode .live-table-source { display:block; width:100%; min-height:7em; padding:8px; resize:vertical; border:0; outline:0; color:inherit; background:transparent; font:inherit; line-height:1.65; white-space:pre; tab-size:2; }
+.live-preview-mode .live-table-cell-source { display:block; width:100%; min-width:7em; min-height:2.4em; padding:4px 6px; resize:both; border:1px solid #3b82f6; border-radius:4px; outline:0; color:inherit; background:#eff6ff; font:inherit; line-height:1.5; white-space:pre-wrap; }
 .live-syntax-marker { color:#94a3b8!important; font-weight:400!important; font-style:normal!important; text-decoration:none!important; opacity:.88; }
 .live-syntax-strong { font-weight:700; color:inherit; }
 .live-syntax-em { font-style:italic; color:inherit; }
@@ -1843,6 +1845,11 @@ export class MineruLayoutViewer extends HTMLElement {
       if (target.closest('a')) event.preventDefault()
       const editable = target.closest<HTMLElement>('.live-editable')
       if (editable) {
+        const cell = target.closest<HTMLElement>('th,td')
+        if (editable.tagName === 'TABLE' && cell) {
+          this.beginLiveTableCellEdit(editable, cell)
+          return
+        }
         this.beginLiveEdit(editable)
         editable.focus()
       }
@@ -1890,7 +1897,7 @@ export class MineruLayoutViewer extends HTMLElement {
       }
       if (!element.hasAttribute('data-md-start-line')) continue
       element.classList.add('live-editable')
-      element.contentEditable = 'true'
+      element.contentEditable = element.tagName === 'TABLE' ? 'false' : 'true'
       element.spellcheck = true
       element.setAttribute('role', 'textbox')
       element.setAttribute('aria-multiline', 'true')
@@ -1899,7 +1906,10 @@ export class MineruLayoutViewer extends HTMLElement {
 
     preview.addEventListener('focusin', event => {
       const element = (event.target as Element).closest<HTMLElement>('.live-editable')
-      if (element) this.beginLiveEdit(element)
+      // A table receives focus before the cell click is dispatched. Starting
+      // whole-table editing here would erase the clicked cell before the
+      // cell-level click handler can identify it.
+      if (element && element.tagName !== 'TABLE') this.beginLiveEdit(element)
     })
     preview.addEventListener('input', event => {
       const element = (event.target as Element).closest<HTMLElement>('.live-editable')
@@ -1938,9 +1948,111 @@ export class MineruLayoutViewer extends HTMLElement {
       originalDocument: this.markdownText,
       originalSections: this.sections,
       changed: false,
+      kind: 'block',
     }
     const source = this.markdownText.slice(start, end).replace(/\r?\n$/, '')
     this.showLiveSource(element, source)
+  }
+
+  private beginLiveTableCellEdit(table: HTMLElement, cell: HTMLElement) {
+    if (this.markdownText == null) return
+    const range = this.sourceRangeForTableCell(table, cell)
+    if (!range) {
+      // Unknown table syntax keeps the previous whole-table editor as a safe fallback.
+      this.beginLiveEdit(table)
+      return
+    }
+    if (this.liveEditSession) this.finishLiveEdit(false)
+    const [start, end] = range
+    const source = this.markdownText.slice(start, end)
+    const original = cell.innerHTML
+    const textarea = document.createElement('textarea')
+    textarea.className = 'live-source-code live-table-cell-source'
+    textarea.setAttribute('aria-label', '单元格内容')
+    textarea.spellcheck = false
+    textarea.value = source
+    cell.replaceChildren(textarea)
+    this.liveEditSession = {
+      element: cell,
+      start,
+      end,
+      originalEnd: end,
+      originalDocument: this.markdownText,
+      originalSections: this.sections,
+      changed: false,
+      kind: 'table-cell',
+    }
+    for (const eventName of ['click', 'dblclick', 'focusin', 'input', 'focusout']) {
+      textarea.addEventListener(eventName, event => event.stopPropagation())
+    }
+    textarea.addEventListener('input', () => this.syncLiveEdit(cell))
+    textarea.addEventListener('blur', () => this.finishLiveEdit())
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        cell.innerHTML = original
+        this.markdownText = this.liveEditSession?.originalDocument || this.markdownText
+        this.sections = this.liveEditSession?.originalSections || this.sections
+        this.liveEditSession = null
+        this.rebuildMarkdownView()
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        this.syncLiveEdit(cell)
+        textarea.blur()
+      }
+    })
+    queueMicrotask(() => {
+      textarea.focus()
+      textarea.select()
+    })
+  }
+
+  private sourceRangeForTableCell(table: HTMLElement, cell: HTMLElement): [number, number] | null {
+    if (this.markdownText == null) return null
+    const startLine = Number(table.dataset.mdStartLine)
+    const endLine = Number(table.dataset.mdEndLine)
+    if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return null
+    const [tableStart, tableEnd] = this.sourceRangeForLines(startLine, endLine)
+    const source = this.markdownText.slice(tableStart, tableEnd).replace(/\r?\n$/, '')
+    const cells = Array.from(table.querySelectorAll<HTMLElement>('th,td'))
+      .filter(candidate => candidate.closest('table') === table)
+    const cellIndex = cells.indexOf(cell)
+    if (cellIndex < 0) return null
+
+    if (/<table\b/i.test(source)) {
+      const openings = Array.from(source.matchAll(/<(td|th)\b[^>]*>/gi))
+      const opening = openings[cellIndex]
+      if (!opening || opening.index == null) return null
+      const contentStart = opening.index + opening[0].length
+      const closing = new RegExp(`<\\/${opening[1]}\\s*>`, 'i').exec(source.slice(contentStart))
+      if (!closing || closing.index == null) return null
+      return [tableStart + contentStart, tableStart + contentStart + closing.index]
+    }
+
+    const rows = Array.from(table.querySelectorAll<HTMLElement>('tr'))
+      .filter(row => row.closest('table') === table)
+    const row = cell.closest<HTMLElement>('tr')
+    const rowIndex = row ? rows.indexOf(row) : -1
+    if (rowIndex < 0) return null
+    const sourceLines = source.split('\n')
+    const contentLines = sourceLines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => /^\s*\|.*\|\s*$/.test(line) && !/^\s*\|[-+:|\s]+\|\s*$/.test(line))
+    const sourceRow = contentLines[rowIndex]
+    if (!sourceRow) return null
+    const rowCells = Array.from(row!.querySelectorAll<HTMLElement>('th,td'))
+      .filter(candidate => candidate.closest('tr') === row)
+    const columnIndex = rowCells.indexOf(cell)
+    const pipes: number[] = []
+    for (let index = 0; index < sourceRow.line.length; index++) {
+      if (sourceRow.line[index] === '|' && (index === 0 || sourceRow.line[index - 1] !== '\\')) pipes.push(index)
+    }
+    if (columnIndex < 0 || pipes.length <= columnIndex + 1) return null
+    let contentStart = pipes[columnIndex] + 1
+    let contentEnd = pipes[columnIndex + 1]
+    while (contentStart < contentEnd && /\s/.test(sourceRow.line[contentStart])) contentStart++
+    while (contentEnd > contentStart && /\s/.test(sourceRow.line[contentEnd - 1])) contentEnd--
+    const precedingLength = sourceLines.slice(0, sourceRow.index).reduce((total, line) => total + line.length + 1, 0)
+    return [tableStart + precedingLength + contentStart, tableStart + precedingLength + contentEnd]
   }
 
   private syncLiveEdit(element: HTMLElement) {
