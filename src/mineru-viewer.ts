@@ -1777,6 +1777,7 @@ export class MineruLayoutViewer extends HTMLElement {
     const sourceLines = (this.markdownText || '').split(/\r?\n/)
     let mathStart = -1
     let tableStart = -1
+    let htmlTableStart = -1
     sourceLines.forEach((line, index) => {
       const delimiters = (line.match(/\$\$/g) || []).length
       if (mathStart < 0 && delimiters) {
@@ -1797,8 +1798,15 @@ export class MineruLayoutViewer extends HTMLElement {
         tableRanges.push([tableStart, index])
         tableStart = -1
       }
+      if (htmlTableStart < 0 && /<table\b/i.test(line)) htmlTableStart = index
+      if (htmlTableStart >= 0 && /<\/table\s*>/i.test(line)) {
+        tableRanges.push([htmlTableStart, index + 1])
+        htmlTableStart = -1
+      }
     })
     if (tableStart >= 0) tableRanges.push([tableStart, sourceLines.length])
+    if (htmlTableStart >= 0) tableRanges.push([htmlTableStart, sourceLines.length])
+    tableRanges.sort((left, right) => left[0] - right[0])
     const displayMath = Array.from(preview.querySelectorAll<HTMLElement>(':scope > section'))
       .filter(element => element.querySelector('eqn') && !element.hasAttribute('data-md-start-line'))
     displayMath.forEach((element, index) => {
