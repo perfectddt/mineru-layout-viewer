@@ -22,6 +22,13 @@ class ViewerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
+    def end_headers(self) -> None:
+        # This is a local development/editor server. Always revalidate UI
+        # assets so an already-used browser does not keep an older viewer
+        # bundle after the source has been rebuilt.
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        super().end_headers()
+
     def _json(self, data: object, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
