@@ -74,6 +74,47 @@ test('Markdown image lines preserve offsets and match blocks by image path', () 
   assert.equal(removed.includes('End'), true)
 })
 
+test('ordered matching keeps repeated headings on successive PDF pages', () => {
+  const markdown = '# 练习题\n\n第一部分具体内容\n\n# 练习题\n\n第二部分具体内容\n'
+  const blocks = [
+    { id: 'heading-1', type: 'text', text: '练习题', page_idx: 0, bbox: [0.1, 0.1, 0.8, 0.2] },
+    { id: 'body-1', type: 'text', text: '第一部分具体内容', page_idx: 0, bbox: [0.1, 0.2, 0.8, 0.3] },
+    { id: 'heading-2', type: 'text', text: '练习题', page_idx: 1, bbox: [0.1, 0.1, 0.8, 0.2] },
+    { id: 'body-2', type: 'text', text: '第二部分具体内容', page_idx: 1, bbox: [0.1, 0.2, 0.8, 0.3] },
+  ]
+  const matched = matchMarkdownToPdf(markdown, blocks)
+
+  assert.deepEqual(matched.map(section => section.blockId), ['heading-1', 'body-1', 'heading-2', 'body-2'])
+  assert.deepEqual(matched.map(section => section.page), [1, 1, 2, 2])
+})
+
+test('ordered matching ignores page furniture and keeps tables on table blocks', () => {
+  const markdown = '公共页眉文字\n\n| 姓名 | 分数 |\n| --- | --- |\n| 小王 | 90 |\n'
+  const blocks = [
+    { id: 'header', type: 'header', text: '公共页眉文字', page_idx: 0, bbox: [0, 0, 1, 0.05] },
+    { id: 'body', type: 'text', text: '公共页眉文字', page_idx: 0, bbox: [0.1, 0.1, 0.9, 0.2] },
+    { id: 'table-as-text', type: 'text', text: '姓名 分数 小王 90', page_idx: 0, bbox: [0.1, 0.2, 0.9, 0.4] },
+    { id: 'table', type: 'table', text: '姓名 分数 小王 90', page_idx: 0, bbox: [0.1, 0.4, 0.9, 0.8] },
+  ]
+  const matched = matchMarkdownToPdf(markdown, blocks)
+
+  assert.equal(matched[0].blockId, 'body')
+  assert.equal(matched[1].blockId, 'table')
+})
+
+test('a table caption and its following HTML table can share one layout block', () => {
+  const markdown = '年度汇总表\n\n<table><tr><td>年度</td><td>人数</td></tr></table>\n\n下一节\n'
+  const blocks = [
+    { id: 'captioned-table', type: 'table', text: '年度汇总表', page_idx: 0, bbox: [0.1, 0.1, 0.9, 0.6] },
+    { id: 'next', type: 'text', text: '下一节', page_idx: 0, bbox: [0.1, 0.7, 0.9, 0.8] },
+  ]
+  const matched = matchMarkdownToPdf(markdown, blocks)
+
+  assert.equal(matched[0].blockId, 'captioned-table')
+  assert.equal(matched[1].blockId, 'captioned-table')
+  assert.equal(matched[2].blockId, 'next')
+})
+
 test('Markdown preview renders formatting with source-line annotations and safe HTML defaults', () => {
   const renderer = new MarkdownPreviewRenderer()
   const html = renderer.render('# Heading\n\n**bold** and <script>alert(1)</script>\n')

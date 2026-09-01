@@ -1,6 +1,6 @@
 import JSZip from 'jszip'
 import { parseBlocks, normalizeAssetPath } from './parse-blocks.js'
-import { matchMarkdownToPdf, matchSectionsToPdf, normalize, lcsSimilarity } from './match-markdown.js'
+import { matchSectionsToPdf, normalize, lcsSimilarity } from './match-markdown.js'
 import { parseMarkdownSections } from './parse-markdown.js'
 import { MarkdownPreviewRenderer, type MarkdownRenderPlugin } from './markdown-preview.js'
 import { createElegantReadingTheme, createRichMarkdownPlugin } from './rich-markdown-plugin.js'
@@ -298,6 +298,18 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 }
 `
 
+const VIEWER_SCRIPT_URL = (() => {
+  if (typeof document === 'undefined') return null
+  const current = document.currentScript as HTMLScriptElement | null
+  return current?.src || Array.from(document.scripts)
+    .map(script => script.src)
+    .find(url => /(?:mineru-layout-viewer\.iife\.js|index\.mjs)(?:\?|$)/.test(url))
+})()
+const VIEWER_ASSET_BASE_URL = VIEWER_SCRIPT_URL ? new URL('.', VIEWER_SCRIPT_URL).href : null
+const VIEWER_ASSET_VERSION = VIEWER_SCRIPT_URL
+  ? new URL(VIEWER_SCRIPT_URL).searchParams.get('v')
+  : null
+
 export class MineruLayoutViewer extends HTMLElement {
   private blocks: PdfBlock[] = []
   private sections: MdSection[] = []
@@ -307,6 +319,8 @@ export class MineruLayoutViewer extends HTMLElement {
   private pdfUrl: string | null = null
   private renderedPdfUrl: string | null = null
   private ownedPdfUrl: string | null = null
+  private externalPdfUrl: string | null = null
+  private externalPdfPath = ''
   private layoutData: string | null = null
   private contentListData: string | null = null
   private markdownText: string | null = null
@@ -588,7 +602,11 @@ export class MineruLayoutViewer extends HTMLElement {
   }
 
   /** Load recursively collected drag/drop entries, including legacy webkitGetAsEntry results. */
-  async loadDirectoryEntries(entries: Array<{ path: string; file: File }>) {
+  async loadDirectoryEntries(
+    entries: Array<{ path: string; file: File }>,
+    directPdfUrl?: string,
+    directPdfPath = '',
+  ) {
     this.resetReviewState()
     this.startLoadProgress('正在读取文件夹…')
     this.beginProgressEstimate('read-directory')
@@ -608,7 +626,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.sourceZipName = `${rootName || 'mineru-result'}.zip`
     const directPdf = entries.find(item => /_origin\.pdf$/i.test(item.file.name))?.file
       || entries.find(item => /\.pdf$/i.test(item.file.name))?.file
-    await this.loadArchiveEntries(directPdf)
+    await this.loadArchiveEntries(directPdfUrl || directPdf, directPdfPath)
   }
 
   /** Open a directory with read/write permission so full.md and deleted assets can be saved in place. */
@@ -652,7 +670,7 @@ export class MineruLayoutViewer extends HTMLElement {
     }
   }
 
-  private async loadArchiveEntries(directPdf?: File) {
+  private async loadArchiveEntries(directPdf?: File | string, directPdfPath = '') {
     if (!this.zip) return
 
     const names = Object.keys(this.zip.files).filter(name => !this.zip!.files[name].dir)
@@ -684,7 +702,12 @@ export class MineruLayoutViewer extends HTMLElement {
 
     const pdfPath = names.find(name => /_origin\.pdf$/i.test(name))
       || names.find(name => /\.pdf$/i.test(name))
-    if (directPdf) {
+    if (typeof directPdf === 'string') {
+      this.setLoadProgress(64, '正在流式打开 PDF…')
+      this.externalPdfUrl = directPdf
+      this.externalPdfPath = normalizeAssetPath(directPdfPath).replace(/^\/+/, '')
+      this.pdfUrl = directPdf
+    } else if (directPdf) {
       this.setLoadProgress(64, '正在打开 PDF…')
       this.ownedPdfUrl = URL.createObjectURL(directPdf)
       this.pdfUrl = this.ownedPdfUrl
@@ -718,6 +741,13 @@ export class MineruLayoutViewer extends HTMLElement {
 
     try {
       this.zip.file(this.markdownPath, this.markdownText)
+      if (this.externalPdfUrl && this.externalPdfPath && !this.zip.file(this.externalPdfPath)) {
+        if (exportButton) exportButton.textContent = '正在读取原始 PDF…'
+        const response = await fetch(this.externalPdfUrl)
+        if (!response.ok) throw new Error(`读取原始 PDF 失败：HTTP ${response.status}`)
+        this.zip.file(this.externalPdfPath, await response.blob())
+        if (exportButton) exportButton.textContent = '正在生成 ZIP…'
+      }
       this.zip.file('review_edits.json', JSON.stringify({
         source: this.sourceZipName,
         markdown: this.markdownPath,
@@ -1053,13 +1083,51 @@ export class MineruLayoutViewer extends HTMLElement {
     this.blocks = parseBlocks(primaryData)
     const markdown = this.markdownText
       || this.blocks.map(block => block.text || '').filter(Boolean).join('\n')
-    this.sections = matchMarkdownToPdf(markdown, this.blocks)
-
-    if (this.pdfUrl && this.renderedPdfUrl !== this.pdfUrl) {
-      await this.renderPdfPages()
-    }
+    this.setStatus('正在后台匹配 PDF 与 Markdown…')
+    const matching = this.matchMarkdownInWorker(markdown, this.blocks)
+    const pdfLoading = this.pdfUrl && this.renderedPdfUrl !== this.pdfUrl
+      ? this.renderPdfPages()
+      : Promise.resolve()
+    const [sections] = await Promise.all([matching, pdfLoading])
+    this.sections = sections
     if (sequence !== this.rebuildSequence) return
     this.buildUI()
+  }
+
+  private async matchMarkdownInWorker(markdown: string, blocks: PdfBlock[]): Promise<MdSection[]> {
+    const sections = parseMarkdownSections(markdown)
+    if (typeof Worker === 'undefined' || !VIEWER_ASSET_BASE_URL) {
+      return matchSectionsToPdf(sections, blocks)
+    }
+    const workerUrl = new URL('match-worker.js', VIEWER_ASSET_BASE_URL)
+    if (VIEWER_ASSET_VERSION) workerUrl.searchParams.set('v', VIEWER_ASSET_VERSION)
+    const worker = new Worker(workerUrl)
+    return new Promise(resolve => {
+      let settled = false
+      const finish = (matched: MdSection[]) => {
+        if (settled) return
+        settled = true
+        worker.terminate()
+        resolve(matched)
+      }
+      const fallback = () => {
+        finish(matchSectionsToPdf(sections, blocks))
+      }
+      const timer = setTimeout(fallback, 120000)
+      worker.addEventListener('message', event => {
+        clearTimeout(timer)
+        if (event.data?.error || !Array.isArray(event.data?.matched)) {
+          fallback()
+          return
+        }
+        finish(event.data.matched as MdSection[])
+      }, { once: true })
+      worker.addEventListener('error', () => {
+        clearTimeout(timer)
+        fallback()
+      }, { once: true })
+      worker.postMessage({ id: 1, sections, blocks })
+    })
   }
 
   private rebuildMarkdownView() {
@@ -3401,6 +3469,8 @@ export class MineruLayoutViewer extends HTMLElement {
     this.layoutData = null
     this.contentListData = null
     this.pdfUrl = null
+    this.externalPdfUrl = null
+    this.externalPdfPath = ''
     this.renderedPdfUrl = null
     this.pages = []
     this.blocks = []

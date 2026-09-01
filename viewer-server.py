@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import secrets
+import re
 import sys
 import tempfile
 import threading
@@ -40,6 +41,62 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
     def _authorized(self, query: dict[str, list[str]]) -> bool:
         return secrets.compare_digest(query.get("token", [""])[0], TOKEN)
+
+    def _launch_file(self, query: dict[str, list[str]]) -> Path | None:
+        target = LAUNCHES.get(query.get("launch", [""])[0])
+        if not target:
+            return None
+        relative = query.get("path", [""])[0]
+        file_path = target if target.is_file() else (target / relative).resolve()
+        if target.is_dir() and target not in file_path.parents:
+            return None
+        return file_path if file_path.is_file() else None
+
+    def _serve_local_file(self, file_path: Path, include_body: bool = True) -> None:
+        size = file_path.stat().st_size
+        start, end = 0, max(0, size - 1)
+        partial = False
+        range_header = self.headers.get("Range", "")
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+            if not match:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = min(int(last), size - 1) if last else size - 1
+            elif last:
+                length = min(int(last), size)
+                start, end = size - length, size - 1
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            partial = True
+
+        length = max(0, end - start + 1)
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", mimetypes.guess_type(file_path.name)[0] or "application/octet-stream")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if not include_body:
+            return
+        with file_path.open("rb") as source:
+            source.seek(start)
+            remaining = length
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -82,30 +139,28 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             if not self._authorized(query):
                 self.send_error(403)
                 return
-            launch_id = query.get("launch", [""])[0]
-            target = LAUNCHES.get(launch_id)
-            if not target:
+            file_path = self._launch_file(query)
+            if not file_path:
                 self.send_error(404)
                 return
-            relative = query.get("path", [""])[0]
-            file_path = target if target.is_file() else (target / relative).resolve()
-            if target.is_dir() and target not in file_path.parents:
-                self.send_error(403)
-                return
-            if not file_path.is_file():
-                self.send_error(404)
-                return
-            size = file_path.stat().st_size
-            self.send_response(200)
-            self.send_header("Content-Type", mimetypes.guess_type(file_path.name)[0] or "application/octet-stream")
-            self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            with file_path.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
-                    self.wfile.write(chunk)
+            self._serve_local_file(file_path)
             return
         super().do_GET()
+
+    def do_HEAD(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+        if parsed.path == "/__viewer/file":
+            if not self._authorized(query):
+                self.send_error(403)
+                return
+            file_path = self._launch_file(query)
+            if not file_path:
+                self.send_error(404)
+                return
+            self._serve_local_file(file_path, include_body=False)
+            return
+        super().do_HEAD()
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)

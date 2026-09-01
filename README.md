@@ -270,6 +270,8 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 - **框架无关** — 基于 Web Component，支持 React、Vue 或原生 HTML
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
 - **文件夹直拖** — 支持现代目录句柄，并提供旧版 WebKit 目录递归读取后备方案
+- **大 PDF 流式加载** — 通过 Windows 启动器打开文件夹时使用 HTTP Range 按需读取 PDF 页面，不再等待整份 PDF 进入内存；导出修改版 ZIP 时才补读原 PDF
+- **后台有序匹配** — 在 Web Worker 中按阅读顺序和局部窗口匹配 Markdown/PDF，区分正文、表格和页眉页脚，避免重复标题跳到错误页面并减少界面卡顿
 - **分阶段动态进度** — 显示载入阶段；仅在字节读取、文件计数和解压等可测阶段估算剩余时间
 - **可拖动工作区与目录** — PDF/Markdown 支持左右或上下排列、位置交换和分隔线拖动；书签/大纲也支持左右或上下排列
 - **持久化设置** — 记住主工作区比例、目录方向/大小以及 Markdown、Org 各自的渲染插件列表
@@ -377,7 +379,7 @@ interface PdfBlock {
 
 #### `matchMarkdownToPdf(markdown: string, blocks: PdfBlock[]): MdSection[]`
 
-使用 LCS 相似度将 Markdown 文本（按行分割）匹配到 PDF block。
+使用阅读顺序、局部候选窗口和文本相似度将 Markdown 文本匹配到 PDF block。图片按资源路径匹配，表格仅匹配表格块，页眉、页脚和页码不参与正文匹配。组件界面加载时会把这项工作放到 Web Worker 中。
 
 ```ts
 interface MdSection {
@@ -409,7 +411,7 @@ interface MdSection {
 | `loadZip(blob: Blob): Promise<void>`    | 从 Mineru 导出 .zip 加载    |
 | `loadDirectory(files: FileList \| File[]): Promise<void>` | 直接加载未压缩的 MinerU 结果文件夹 |
 | `loadDirectoryHandle(handle): Promise<void>` | 以可读写权限打开结果文件夹 |
-| `loadDirectoryEntries(entries): Promise<void>` | 加载目录拖放递归收集的文件和路径 |
+| `loadDirectoryEntries(entries, directPdfUrl?, directPdfPath?): Promise<void>` | 加载目录拖放递归收集的文件和路径；可传入支持 Range 的 PDF URL |
 | `loadMarkdownFile(file, handle?): Promise<void>` | 以独立 Markdown 或 Org 编辑器模式打开单文件 |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |

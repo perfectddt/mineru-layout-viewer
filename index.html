@@ -6,7 +6,7 @@
 <title>mineru-layout-viewer 测试</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="./dist/mineru-layout-viewer.iife.js?v=20260828-table-cell-3"></script>
+<script src="./dist/mineru-layout-viewer.iife.js?v=20260901-range-worker-1"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { height: 100vh; display:flex; flex-direction:column; font-family: system-ui, sans-serif; }
@@ -217,13 +217,19 @@ async function loadLauncherTarget() {
       return
     }
     const entries = []
+    const directPdfPath = manifest.files.find(path => /_origin\.pdf$/i.test(path))
+      || manifest.files.find(path => /\.pdf$/i.test(path))
     for (let index = 0; index < manifest.files.length; index++) {
       const path = manifest.files[index]
+      if (path === directPdfPath) continue
       loadStatus.textContent = `正在读取文件夹：${index + 1}/${manifest.files.length}`
       const blob = await fetch(`/__viewer/file?${query}&path=${encodeURIComponent(path)}`).then(response => response.blob())
       entries.push({ path, file: new File([blob], path.split('/').pop(), { type: blob.type }) })
     }
-    await viewer.loadDirectoryEntries(entries)
+    const directPdfUrl = directPdfPath
+      ? `/__viewer/file?${query}&path=${encodeURIComponent(directPdfPath)}`
+      : undefined
+    await viewer.loadDirectoryEntries(entries, directPdfUrl, directPdfPath)
   } catch (error) {
     viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
     loadStatus.textContent = error instanceof Error ? error.message : String(error)

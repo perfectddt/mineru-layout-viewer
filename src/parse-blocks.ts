@@ -23,6 +23,7 @@ export interface MdSection {
   page: number
   bbox: [number, number, number, number] | null
   blockId?: string
+  matchScore?: number
 }
 
 type JsonObject = Record<string, unknown>

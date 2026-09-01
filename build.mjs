@@ -30,12 +30,22 @@ const ctx2 = await esbuild.context({
   external: [],
 })
 
+const ctx3 = await esbuild.context({
+  entryPoints: ['src/match-worker.ts'],
+  outfile: 'dist/match-worker.js',
+  bundle: true,
+  format: 'iife',
+  target: 'es2022',
+  sourcemap: true,
+})
+
 if (watch) {
-  await Promise.all([ctx1.watch(), ctx2.watch()])
+  await Promise.all([ctx1.watch(), ctx2.watch(), ctx3.watch()])
   console.log('👀 watching...')
 } else {
-  await Promise.all([ctx1.rebuild(), ctx2.rebuild()])
-  console.log('✅ built dist/index.mjs + dist/mineru-layout-viewer.iife.js')
+  await Promise.all([ctx1.rebuild(), ctx2.rebuild(), ctx3.rebuild()])
+  console.log('✅ built viewer bundles + dist/match-worker.js')
   await ctx1.dispose()
   await ctx2.dispose()
+  await ctx3.dispose()
 }
