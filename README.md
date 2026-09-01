@@ -1,7 +1,8 @@
 # MinerU Layout Viewer
 
 On Windows, double-click `start-viewer.cmd` to start the local server from the
-project root at `http://127.0.0.1:18768/` and open the viewer automatically. Avoid opening `index.html`
+project root and open the viewer automatically. It prefers `http://127.0.0.1:18768/`
+and automatically chooses a free loopback port when that port is occupied. Avoid opening `index.html`
 through `file://`, because browser security restrictions can prevent folder
 write-back, plugin fonts, dynamic resources, or PDF workers from loading.
 
@@ -240,7 +241,7 @@ MIT
 ## 中文
 
 Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会从项目根目录
-在独立地址 `http://127.0.0.1:18768/` 启动本地服务并自动打开浏览器，不需要手动输入网址。启动器还会核对页面身份，避免误打开占用其他端口的软件。不要通过 `file://` 直接
+启动本地服务并自动打开浏览器，不需要手动输入网址。服务优先使用 `http://127.0.0.1:18768/`；若端口已被占用，会自动选择其他空闲的本机端口。启动器还会核对页面身份并读取实际端口，避免误打开其他软件。不要通过 `file://` 直接
 打开 `index.html`，否则浏览器安全限制可能导致文件夹写回、插件字体、动态资源
 或 PDF Worker 无法正常工作。
 

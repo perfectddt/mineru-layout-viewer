@@ -9,14 +9,26 @@ import sys
 import tempfile
 import threading
 import urllib.parse
+import argparse
+import errno
+import socket
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-PORT = 18768
+PREFERRED_PORT = 18768
 TOKEN = secrets.token_urlsafe(24)
 STATE_FILE = Path(tempfile.gettempdir()) / "mineru-layout-viewer-server.json"
 LAUNCHES: dict[str, Path] = {}
+
+
+class ViewerServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 class ViewerHandler(SimpleHTTPRequestHandler):
@@ -188,15 +200,33 @@ class ViewerHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), ViewerHandler)
-    STATE_FILE.write_text(json.dumps({"port": PORT, "token": TOKEN, "pid": os.getpid()}), encoding="utf-8")
+    parser = argparse.ArgumentParser(description="MinerU Layout Viewer local server")
+    parser.add_argument("--port", type=int, default=PREFERRED_PORT)
+    args = parser.parse_args()
+    try:
+        server = ViewerServer(("127.0.0.1", args.port), ViewerHandler)
+    except OSError as error:
+        address_in_use = error.errno in {errno.EADDRINUSE, 10048} or getattr(error, "winerror", None) == 10048
+        if not address_in_use or args.port == 0:
+            raise
+        server = ViewerServer(("127.0.0.1", 0), ViewerHandler)
+    actual_port = int(server.server_address[1])
+    state_data = {"port": actual_port, "token": TOKEN, "pid": os.getpid()}
+    state_temporary = STATE_FILE.with_name(f".{STATE_FILE.name}.{os.getpid()}.tmp")
+    state_temporary.write_text(
+        json.dumps(state_data),
+        encoding="utf-8",
+    )
+    os.replace(state_temporary, STATE_FILE)
     try:
         server.serve_forever()
     finally:
         server.server_close()
         try:
-            STATE_FILE.unlink()
-        except FileNotFoundError:
+            current_state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            if current_state.get("pid") == os.getpid() and current_state.get("token") == TOKEN:
+                STATE_FILE.unlink()
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
             pass
 
 

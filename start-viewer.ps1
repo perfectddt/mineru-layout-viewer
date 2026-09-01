@@ -7,8 +7,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$port = 18768
-$viewerUrl = "http://127.0.0.1:$port/"
+$preferredPort = 18768
+$viewerUrl = $null
 $stateFile = Join-Path ([System.IO.Path]::GetTempPath()) 'mineru-layout-viewer-server.json'
 $serverState = $null
 
@@ -16,18 +16,22 @@ function Test-ViewerServer {
   try {
     if (-not (Test-Path -LiteralPath $stateFile)) { return $false }
     $script:serverState = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-    if ($script:serverState.port -ne $port -or -not $script:serverState.token) { return $false }
-    $identityUrl = "$viewerUrl`__viewer/identity?token=$([uri]::EscapeDataString($script:serverState.token))"
+    if (-not $script:serverState.port -or -not $script:serverState.token) { return $false }
+    $candidateUrl = "http://127.0.0.1:$($script:serverState.port)/"
+    $identityUrl = "$candidateUrl`__viewer/identity?token=$([uri]::EscapeDataString($script:serverState.token))"
     $identity = Invoke-RestMethod -UseBasicParsing -Uri $identityUrl -TimeoutSec 1
-    return $identity.app -eq 'mineru-layout-viewer'
+    if ($identity.app -ne 'mineru-layout-viewer') { return $false }
+    $script:viewerUrl = $candidateUrl
+    return $true
   } catch {
     return $false
   }
 }
 
 if (-not (Test-ViewerServer)) {
+  Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
   $python = Get-Command py -ErrorAction SilentlyContinue
-  $arguments = @(('"{0}"' -f (Join-Path $projectRoot 'viewer-server.py')))
+  $arguments = @(('"{0}"' -f (Join-Path $projectRoot 'viewer-server.py')), '--port', $preferredPort)
 
   if ($python) {
     $arguments = @('-3') + $arguments
@@ -58,7 +62,7 @@ if (-not (Test-ViewerServer)) {
 if (-not (Test-ViewerServer)) {
   Add-Type -AssemblyName PresentationFramework
   [System.Windows.MessageBox]::Show(
-    "The local server failed to start. Check whether port $port is already in use.",
+    'The local server failed to start.',
     'MinerU Layout Viewer'
   ) | Out-Null
   exit 1
@@ -70,7 +74,7 @@ if (-not $NoOpen) {
     $targetPath = [System.IO.Path]::GetFullPath($Paths[0])
     $openUrl = "$viewerUrl`__viewer/open?token=$([uri]::EscapeDataString($serverState.token))&path=$([uri]::EscapeDataString($targetPath))"
     $launch = Invoke-RestMethod -UseBasicParsing -Uri $openUrl -TimeoutSec 10
-    $targetUrl = "http://127.0.0.1:$port$($launch.url)"
+    $targetUrl = "$($viewerUrl.TrimEnd('/'))$($launch.url)"
   }
   Start-Process $targetUrl
 }
