@@ -14,7 +14,7 @@ changes back to the original file.
 
 Visualize [MinerU](https://github.com/opendatalab/MinerU) `layout.json` / `middle.json` output — side-by-side PDF + Markdown with bidirectional click-to-navigate.
 
-[English](#english) | [中文](#chinese)
+[English](#english) | [中文](#chinese) | [完整更新记录](CHANGELOG.md)
 
 ---
 
