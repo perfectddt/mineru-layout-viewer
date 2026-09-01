@@ -14,14 +14,28 @@ import type { PdfBlock, MdSection } from './parse-blocks.js'
 
 declare const pdfjsLib: typeof import('pdfjs-dist')
 
-const RENDER_SCALE = 1.5
+export type PdfRenderMode = 'fast' | 'quality'
+const PDF_VIRTUAL_MARGIN = 900
+
+export function computePdfRenderScale(
+  mode: PdfRenderMode,
+  cssWidth: number,
+  pageWidth: number,
+  pixelRatio: number,
+): number {
+  const cssScale = Math.max(0.1, cssWidth / Math.max(pageWidth, 1))
+  if (mode === 'fast') return Math.max(0.75, Math.min(1.15, cssScale))
+  return Math.max(1.75, Math.min(3, cssScale * Math.max(pixelRatio, 1)))
+}
 
 interface PdfPageState {
   p: number
   w: number
   h: number
   rendered: boolean
+  renderVersion: number
   rendering?: Promise<void>
+  renderTask?: { cancel(): void }
 }
 
 interface ReviewEdit {
@@ -76,6 +90,7 @@ interface ViewerSettings {
   pdfOutlineSize: number
   markdownOutlineLayout: OutlineLayout
   markdownOutlineSize: number
+  pdfRenderMode: PdfRenderMode
 }
 
 const VIEWER_SETTINGS_KEY = 'mineru-layout-viewer-settings-v1'
@@ -98,6 +113,7 @@ const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   pdfOutlineSize: 33,
   markdownOutlineLayout: 'side',
   markdownOutlineSize: 33,
+  pdfRenderMode: 'fast',
 }
 
 const STYLES = `
@@ -142,6 +158,7 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .pane-column { min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
 .left-column { border-right:1px solid #e5e7eb; }
 .pane-toolbar { min-height:42px; display:flex; align-items:center; gap:5px; padding:6px 9px; border-bottom:1px solid #e5e7eb; flex-shrink:0; font-size:12px; color:#6b7280; background:#fff; }
+.pane-toolbar select { height:28px; padding:2px 6px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#334155; font-size:12px; }
 .split:not(.workspace-stack):not(.swapped) .left-column .pane-toolbar,.split:not(.workspace-stack).swapped .right-column .pane-toolbar { padding-right:28px; }
 .split:not(.workspace-stack):not(.swapped) .right-column .pane-toolbar,.split:not(.workspace-stack).swapped .left-column .pane-toolbar { padding-left:28px; }
 .pane-toolbar .spacer { flex:1; }
@@ -280,6 +297,7 @@ button.danger:hover:not(:disabled) { border-color:#dc2626; color:#b91c1c; backgr
 .settings-row { display:grid; grid-template-columns:112px minmax(0,1fr) 42px; align-items:center; gap:7px; margin:7px 0; }
 .settings-row select,.settings-row input[type=range] { width:100%; min-width:0; }
 .settings-value { text-align:right; color:#475569; font-variant-numeric:tabular-nums; }
+.settings-note { color:#64748b; line-height:1.55; }
 .settings-plugin { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .settings-plugin-name { width:100%; color:#475569; word-break:break-all; }
 .settings-plugin-item { display:flex; align-items:center; gap:6px; margin:3px 0; padding:4px 7px; border:1px solid #e2e8f0; border-radius:6px; background:#f8fafc; }
@@ -394,6 +412,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.sourceEditor = null
     this.documentPluginFontStyle?.remove()
     this.documentPluginFontStyle = null
+    this.releaseAllPdfPages()
     void this.pdfDocument?.destroy()
     this.revokeAssetUrls()
     this.revokeOwnedPdfUrl()
@@ -876,6 +895,7 @@ export class MineruLayoutViewer extends HTMLElement {
             <button id="togglePdfOutline" class="menu-toggle" title="显示或隐藏 PDF 书签">☰</button>
             <strong>PDF</strong>
             <button id="dirty" class="history-toggle" title="查看并跳转到修改历史">暂无修改</button>
+            <select id="pdfRenderModeToolbar" title="PDF Canvas 渲染清晰度"><option value="fast">快速</option><option value="quality">高清</option></select>
             <div class="toolbar-group">
               <button id="pdfZoomOut" title="缩小 PDF">−</button>
               <span id="pdfZoomValue" class="zoom-value">适合宽度</span>
@@ -945,6 +965,11 @@ export class MineruLayoutViewer extends HTMLElement {
           <div class="settings-row"><label for="workspaceRatio">左/上工作区</label><input id="workspaceRatio" type="range" min="20" max="80" step="1"><output id="workspaceRatioValue" class="settings-value"></output></div>
         </div>
         <div class="settings-group">
+          <strong>PDF 渲染</strong>
+          <div class="settings-row"><label for="pdfRenderModeSetting">清晰度</label><select id="pdfRenderModeSetting"><option value="fast">快速</option><option value="quality">高清</option></select><span></span></div>
+          <div class="settings-note">快速模式减少 Canvas 像素与内存；高清模式按缩放和屏幕像素密度渲染。离开可视缓冲区的页面都会自动释放。</div>
+        </div>
+        <div class="settings-group">
           <strong>PDF 书签</strong>
           <div class="settings-row"><label for="pdfOutlineLayout">排列</label><select id="pdfOutlineLayout"><option value="side">左右</option><option value="stack">上下</option></select><span></span></div>
           <div class="settings-row"><label for="pdfOutlineSize">默认大小</label><input id="pdfOutlineSize" type="range" min="15" max="70" step="1"><output id="pdfOutlineSizeValue" class="settings-value"></output></div>
@@ -1005,6 +1030,10 @@ export class MineruLayoutViewer extends HTMLElement {
     this.shadowRoot.getElementById('pdfZoomIn')!.addEventListener('click', () => this.changePdfZoom(0.1))
     this.shadowRoot.getElementById('fitPage')!.addEventListener('click', () => this.setPdfFitMode('page'))
     this.shadowRoot.getElementById('fitWidth')!.addEventListener('click', () => this.setPdfFitMode('width'))
+    const pdfRenderModeToolbar = this.shadowRoot.getElementById('pdfRenderModeToolbar') as HTMLSelectElement
+    pdfRenderModeToolbar.addEventListener('change', () => {
+      this.setPdfRenderMode(pdfRenderModeToolbar.value === 'quality' ? 'quality' : 'fast')
+    })
     this.shadowRoot.getElementById('mdZoomOut')!.addEventListener('click', () => this.changeMarkdownZoom(-0.1))
     this.shadowRoot.getElementById('mdZoomIn')!.addEventListener('click', () => this.changeMarkdownZoom(0.1))
     this.shadowRoot.getElementById('mdPreviewMode')!.addEventListener('click', () => this.switchToPreviewMode())
@@ -1145,6 +1174,8 @@ export class MineruLayoutViewer extends HTMLElement {
     if (!this.pdfUrl) return
     const targetUrl = this.pdfUrl
     this.pdfPageObserver?.disconnect()
+    this.pdfPageObserver = null
+    this.releaseAllPdfPages()
     if (this.pdfDocument) await this.pdfDocument.destroy()
     const pdf = await pdfjsLib.getDocument(targetUrl).promise
     this.pdfDocument = pdf
@@ -1157,6 +1188,7 @@ export class MineruLayoutViewer extends HTMLElement {
       w: viewport.width,
       h: viewport.height,
       rendered: false,
+      renderVersion: 0,
     }))
     this.setStatus(`已建立 ${pdf.numPages} 页索引，正在显示首屏…`)
     this.pages = pages
@@ -1257,6 +1289,7 @@ export class MineruLayoutViewer extends HTMLElement {
         pdfOutlineSize: this.clampPercent(stored.pdfOutlineSize, DEFAULT_VIEWER_SETTINGS.pdfOutlineSize, 15, 70),
         markdownOutlineLayout: stored.markdownOutlineLayout === 'stack' ? 'stack' : 'side',
         markdownOutlineSize: this.clampPercent(stored.markdownOutlineSize, DEFAULT_VIEWER_SETTINGS.markdownOutlineSize, 15, 70),
+        pdfRenderMode: stored.pdfRenderMode === 'quality' ? 'quality' : 'fast',
       }
     } catch {
       this.viewerSettings = { ...DEFAULT_VIEWER_SETTINGS }
@@ -1315,6 +1348,10 @@ export class MineruLayoutViewer extends HTMLElement {
       this.updatePaneLayout()
       this.saveViewerSettings()
     })
+    const pdfRenderMode = shadow.getElementById('pdfRenderModeSetting') as HTMLSelectElement
+    pdfRenderMode.addEventListener('change', () => {
+      this.setPdfRenderMode(pdfRenderMode.value === 'quality' ? 'quality' : 'fast')
+    })
   }
 
   private updateSettingsControls() {
@@ -1334,10 +1371,14 @@ export class MineruLayoutViewer extends HTMLElement {
     const standaloneLayout = shadow.getElementById('standaloneSourceLayout') as HTMLSelectElement | null
     const pdfLayout = shadow.getElementById('pdfOutlineLayout') as HTMLSelectElement | null
     const mdLayout = shadow.getElementById('mdOutlineLayout') as HTMLSelectElement | null
+    const pdfRenderModeSetting = shadow.getElementById('pdfRenderModeSetting') as HTMLSelectElement | null
+    const pdfRenderModeToolbar = shadow.getElementById('pdfRenderModeToolbar') as HTMLSelectElement | null
     if (workspaceLayout) workspaceLayout.value = this.viewerSettings.workspaceLayout
     if (standaloneLayout) standaloneLayout.value = this.viewerSettings.standaloneSourceLayout
     if (pdfLayout) pdfLayout.value = this.viewerSettings.pdfOutlineLayout
     if (mdLayout) mdLayout.value = this.viewerSettings.markdownOutlineLayout
+    if (pdfRenderModeSetting) pdfRenderModeSetting.value = this.viewerSettings.pdfRenderMode
+    if (pdfRenderModeToolbar) pdfRenderModeToolbar.value = this.viewerSettings.pdfRenderMode
     const markdownPluginName = shadow.getElementById('markdownPluginName')
     const orgPluginName = shadow.getElementById('orgPluginName')
     const renderPluginList = (host: HTMLElement | null, format: DocumentFormat) => {
@@ -1623,7 +1664,9 @@ export class MineruLayoutViewer extends HTMLElement {
   private buildPdfOverlays() {
     const pane = this.shadowRoot?.getElementById('pdfPane')
     if (!pane) return
+    this.releaseAllPdfPages()
     this.pdfPageObserver?.disconnect()
+    this.pdfPageObserver = null
     pane.innerHTML = ''
     const availableWidth = pane.clientWidth - 20
     const availableHeight = pane.clientHeight - 24
@@ -1723,6 +1766,14 @@ export class MineruLayoutViewer extends HTMLElement {
     this.updateToolbar()
   }
 
+  private setPdfRenderMode(mode: PdfRenderMode) {
+    if (this.viewerSettings.pdfRenderMode === mode) return
+    this.viewerSettings.pdfRenderMode = mode
+    this.saveViewerSettings()
+    this.updateSettingsControls()
+    this.refreshPdfVirtualization()
+  }
+
   private changeMarkdownZoom(delta: number) {
     this.markdownZoom = Math.min(2.2, Math.max(0.6, Number((this.markdownZoom + delta).toFixed(2))))
     const pane = this.shadowRoot?.getElementById('mdPane')
@@ -1736,10 +1787,7 @@ export class MineruLayoutViewer extends HTMLElement {
   private observePdfPage(wrapper: HTMLElement) {
     const pageNumber = Number(wrapper.dataset.page)
     const pageState = this.pages[pageNumber - 1]
-    if (!pageState || pageState.rendered) {
-      if (pageState?.rendered) void this.renderPdfPage(pageNumber, wrapper)
-      return
-    }
+    if (!pageState) return
     if (typeof IntersectionObserver === 'undefined') {
       void this.renderPdfPage(pageNumber, wrapper)
       return
@@ -1748,12 +1796,12 @@ export class MineruLayoutViewer extends HTMLElement {
       const pane = this.shadowRoot!.getElementById('pdfPane')!
       this.pdfPageObserver = new IntersectionObserver(entries => {
         for (const entry of entries) {
-          if (!entry.isIntersecting) continue
           const target = entry.target as HTMLElement
-          this.pdfPageObserver?.unobserve(target)
-          void this.renderPdfPage(Number(target.dataset.page), target)
+          const targetPage = Number(target.dataset.page)
+          if (entry.isIntersecting) void this.renderPdfPage(targetPage, target)
+          else this.releasePdfPage(targetPage, target)
         }
-      }, { root: pane, rootMargin: '1200px 0px' })
+      }, { root: pane, rootMargin: `${PDF_VIRTUAL_MARGIN}px 0px` })
     }
     this.pdfPageObserver.observe(wrapper)
   }
@@ -1765,30 +1813,109 @@ export class MineruLayoutViewer extends HTMLElement {
     const target = wrapper || this.shadowRoot?.querySelector(`.pdf-page[data-page="${pageNumber}"]`) as HTMLElement | null
     if (!target || target.querySelector('canvas')) return
     if (!pageState.rendering) {
-      pageState.rendering = (async () => {
+      const renderVersion = ++pageState.renderVersion
+      let job: Promise<void>
+      job = (async () => {
         const page = await pdfDocument.getPage(pageNumber)
-        const viewport = page.getViewport({ scale: RENDER_SCALE })
-        const unscaledWidth = viewport.width / RENDER_SCALE
-        const unscaledHeight = viewport.height / RENDER_SCALE
-        if (Math.abs((pageState.w / pageState.h) - (unscaledWidth / unscaledHeight)) > 0.005) {
-          pageState.w = unscaledWidth
-          pageState.h = unscaledHeight
-          this.updatePageGeometry(target, pageState)
+        try {
+          if (renderVersion !== pageState.renderVersion) return
+          const baseViewport = page.getViewport({ scale: 1 })
+          if (Math.abs((pageState.w / pageState.h) - (baseViewport.width / baseViewport.height)) > 0.005) {
+            pageState.w = baseViewport.width
+            pageState.h = baseViewport.height
+            this.updatePageGeometry(target, pageState)
+          }
+          const renderScale = this.pdfRenderScale(target, pageState)
+          const viewport = page.getViewport({ scale: renderScale })
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.ceil(viewport.width)
+          canvas.height = Math.ceil(viewport.height)
+          canvas.dataset.pageCanvas = String(pageNumber)
+          canvas.dataset.renderMode = this.viewerSettings.pdfRenderMode
+          canvas.dataset.renderScale = renderScale.toFixed(2)
+          const renderTask = page.render({ canvasContext: canvas.getContext('2d')!, viewport })
+          pageState.renderTask = renderTask
+          try {
+            await renderTask.promise
+          } catch (error) {
+            if ((error as { name?: string })?.name !== 'RenderingCancelledException') throw error
+            return
+          } finally {
+            if (pageState.renderTask === renderTask) pageState.renderTask = undefined
+          }
+          if (renderVersion !== pageState.renderVersion) {
+            canvas.width = 0
+            canvas.height = 0
+            return
+          }
+          const current = this.shadowRoot?.querySelector(`.pdf-page[data-page="${pageNumber}"]`) as HTMLElement | null
+          if (current && !current.querySelector('canvas')) {
+            current.querySelector('.pdf-placeholder')?.replaceWith(canvas)
+            pageState.rendered = true
+          } else {
+            canvas.width = 0
+            canvas.height = 0
+          }
+        } finally {
+          page.cleanup()
         }
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.ceil(viewport.width)
-        canvas.height = Math.ceil(viewport.height)
-        canvas.dataset.pageCanvas = String(pageNumber)
-        await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
-        pageState.rendered = true
-        page.cleanup()
-        const current = this.shadowRoot?.querySelector(`.pdf-page[data-page="${pageNumber}"]`) as HTMLElement | null
-        if (current && !current.querySelector('canvas')) {
-          current.querySelector('.pdf-placeholder')?.replaceWith(canvas)
-        }
-      })().finally(() => { pageState.rendering = undefined })
+      })()
+      pageState.rendering = job
+      const clearRendering = () => {
+        if (pageState.rendering === job) pageState.rendering = undefined
+      }
+      void job.then(clearRendering, clearRendering)
     }
     await pageState.rendering
+  }
+
+  private pdfRenderScale(wrapper: HTMLElement, pageState: PdfPageState): number {
+    const pixelRatio = typeof devicePixelRatio === 'number' ? devicePixelRatio : 1
+    return computePdfRenderScale(
+      this.viewerSettings.pdfRenderMode,
+      wrapper.clientWidth,
+      pageState.w,
+      pixelRatio,
+    )
+  }
+
+  private releasePdfPage(pageNumber: number, wrapper?: HTMLElement) {
+    const pageState = this.pages[pageNumber - 1]
+    if (!pageState) return
+    pageState.renderVersion++
+    try { pageState.renderTask?.cancel() } catch { /* already completed */ }
+    pageState.renderTask = undefined
+    pageState.rendering = undefined
+    pageState.rendered = false
+    const target = wrapper || this.shadowRoot?.querySelector(`.pdf-page[data-page="${pageNumber}"]`) as HTMLElement | null
+    if (!target) return
+    for (const canvas of target.querySelectorAll('canvas')) {
+      canvas.width = 0
+      canvas.height = 0
+      canvas.remove()
+    }
+    if (!target.querySelector('.pdf-placeholder')) {
+      const placeholder = document.createElement('div')
+      placeholder.className = 'pdf-placeholder'
+      placeholder.textContent = `第 ${pageNumber} 页 · 滚动到此处时加载`
+      target.prepend(placeholder)
+    }
+  }
+
+  private releaseAllPdfPages() {
+    for (const pageState of this.pages) {
+      const wrapper = this.shadowRoot?.querySelector(`.pdf-page[data-page="${pageState.p}"]`) as HTMLElement | null
+      this.releasePdfPage(pageState.p, wrapper || undefined)
+    }
+  }
+
+  private refreshPdfVirtualization() {
+    const pane = this.shadowRoot?.getElementById('pdfPane')
+    if (!pane) return
+    this.releaseAllPdfPages()
+    this.pdfPageObserver?.disconnect()
+    this.pdfPageObserver = null
+    pane.querySelectorAll<HTMLElement>('.pdf-page').forEach(wrapper => this.observePdfPage(wrapper))
   }
 
   private updatePageGeometry(wrapper: HTMLElement, pageState: PdfPageState) {
@@ -3459,6 +3586,7 @@ export class MineruLayoutViewer extends HTMLElement {
     this.sourceDraft = ''
     this.pdfPageObserver?.disconnect()
     this.pdfPageObserver = null
+    this.releaseAllPdfPages()
     void this.pdfDocument?.destroy()
     this.pdfDocument = null
     this.revokeAssetUrls()

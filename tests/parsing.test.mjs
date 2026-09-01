@@ -13,6 +13,7 @@ const {
   createRichMarkdownPlugin,
   documentFormatFromName,
   orgToMarkdown,
+  computePdfRenderScale,
 } = await import('../dist/index.mjs')
 const { default: orglistGtdPlugin } = await import('../plugins/orglist-gtd-format.js')
 
@@ -113,6 +114,13 @@ test('a table caption and its following HTML table can share one layout block', 
   assert.equal(matched[0].blockId, 'captioned-table')
   assert.equal(matched[1].blockId, 'captioned-table')
   assert.equal(matched[2].blockId, 'next')
+})
+
+test('PDF render modes cap fast pixels and scale quality with display density', () => {
+  assert.equal(computePdfRenderScale('fast', 1600, 600, 2), 1.15)
+  assert.equal(computePdfRenderScale('fast', 300, 600, 1), 0.75)
+  assert.equal(computePdfRenderScale('quality', 600, 600, 1), 1.75)
+  assert.equal(computePdfRenderScale('quality', 1200, 600, 2), 3)
 })
 
 test('Markdown preview renders formatting with source-line annotations and safe HTML defaults', () => {
