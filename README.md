@@ -62,6 +62,25 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Persistent layout boxes** — text, image, and removed/unreferenced image boxes use distinct always-visible colors
 - **Edited ZIP export** — download a new ZIP with edited Markdown, replacement assets, and `review_edits.json`
 
+### Recent performance and reliability updates
+
+The current `my-main` branch includes three related large-document improvements:
+
+1. **Ordered matching in a Web Worker** — Markdown sections are matched against a local reading-order window instead of scanning every PDF block globally. Repeated headings no longer jump backwards, page furniture is excluded, HTML tables stay on table blocks, and the work no longer blocks the UI thread.
+2. **Range-based folder loading** — when a MinerU result folder is opened through the Windows launcher, the original PDF is served with HTTP Range requests. The browser reads page data on demand; the full PDF is fetched only when an edited ZIP must include it. A directly dropped ZIP still has to decompress its embedded PDF.
+3. **Virtual PDF canvases** — all page shells and overlays remain available for navigation, but Canvas pixels exist only inside a 900 px viewport buffer. Leaving that buffer cancels unfinished rendering, zeroes the Canvas dimensions, and removes it; returning to the page renders it again.
+
+PDF rendering can be changed from either the PDF toolbar or **Settings → PDF rendering**:
+
+| Mode | Behavior | Recommended use |
+|------|----------|-----------------|
+| Fast (default) | Caps the render scale at `1.15×` | Normal review, rapid scrolling, large PDFs |
+| Quality | Uses zoom and display density, capped at `3×` | Small text, figures, and final visual checking |
+
+The Windows launcher prefers port `18768`. If another application owns it, the Viewer uses an OS-selected free loopback port and records the actual port, token, and PID in `%TEMP%\mineru-layout-viewer-server.json`. Later launches reuse that verified instance. Always open the app through its shortcut instead of bookmarking a fixed localhost URL.
+
+Validation on a 142 MB, 88-page MinerU folder: 823 of 978 Markdown sections matched (84.2%), no matched page moved backwards, all six HTML tables found table blocks, initial reload completed in about seven seconds, and only two to four PDF canvases remained allocated while navigating between pages 1 and 60.
+
 ### Installation
 
 ```bash
@@ -293,6 +312,25 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 - **左右独立缩放** — PDF 支持整页、页宽和自定义缩放，Markdown 与图片可单独缩放
 - **框常显与状态配色** — 文字、图片、已删除或未引用图片使用不同颜色且始终可见
 - **导出修改版 ZIP** — 导出修改后的 Markdown、图片以及 `review_edits.json` 操作记录
+
+### 最近的性能与可靠性更新
+
+当前 `my-main` 分支包含三组相互配合的大文档优化：
+
+1. **Web Worker 有序匹配**：Markdown 按阅读顺序和局部候选窗口匹配，不再对全部 PDF 框反复全局扫描；重复标题不会向前跳页，页眉、页脚、页码不参与正文匹配，HTML 表格只落到表格块，计算过程不再阻塞界面线程。
+2. **文件夹 PDF Range 加载**：通过 Windows 启动器打开 MinerU 结果文件夹时，原始 PDF 使用 HTTP Range 按页读取；只有导出必须包含原 PDF 的修改版 ZIP 时才完整读取。直接拖入 ZIP 时仍需解压 ZIP 内的 PDF。
+3. **PDF Canvas 虚拟化**：全部页面外壳和定位框继续保留，但只有可视区域上下 900px 缓冲区内存在 Canvas。页面离开缓冲区后会取消未完成任务、把 Canvas 尺寸归零并移除；滚回时自动重新渲染。
+
+可在 PDF 顶部工具栏或“设置 → PDF 渲染”切换清晰度：
+
+| 模式 | 行为 | 建议场景 |
+|------|------|----------|
+| 快速（默认） | 渲染倍率最高 `1.15×` | 日常审核、快速滚动、大型 PDF |
+| 高清 | 根据当前缩放和屏幕像素密度渲染，最高 `3×` | 小字、图表和最终视觉检查 |
+
+Windows 启动器优先使用 18768。若该端口已被其他软件占用，Viewer 会使用操作系统分配的空闲本机端口，并把实际端口、令牌和 PID 写入 `%TEMP%\mineru-layout-viewer-server.json`；后续启动会验证并复用该实例。请始终通过快捷方式打开，不要收藏固定的 localhost 地址。
+
+使用一份 142MB、88 页的 MinerU 文件夹验证：978 个 Markdown 段落中匹配 823 个（84.2%），匹配页码倒退为 0，6 个 HTML 表格均对应到表格块；重新加载约 7 秒，在第 1 页与第 60 页之间跳转时仅保留 2–4 个 PDF Canvas。
 
 ### 安装
 
