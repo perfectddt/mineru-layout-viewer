@@ -37,7 +37,8 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 
 - **Dual-pane view** — PDF pages on the left, Markdown text on the right
 - **Bidirectional navigation** — click a Markdown line → scrolls to the corresponding PDF block and highlights it; click a PDF overlay → scrolls to the matching Markdown line
-- **Multi-format support** — automatically detects `layout.json`, `middle.json`, and `content_list.json`
+- **Open at a source line** — `start-viewer.cmd notes.md +120`, `--line 120 notes.md`, or `notes.md:120` opens the file and scrolls to that line
+- **Multi-format support** — automatically detects `layout.json`, `middle.json`, `content_list.json`, and `content_list_v2.json`, including page numbers, headers, footers, and page footnotes. Edited Markdown keeps page breaks aligned to the unchanged lines.
 - **Nested block handling** — resolves list items, table cells, and other nested blocks to their leaf coordinates
 - **Framework-agnostic** — built as a Web Component, works with React, Vue, or plain HTML
 - **Zip support** — drop a MinerU output `.zip` directly, auto-extracts PDF + layout + markdown
@@ -55,7 +56,8 @@ Drop a MinerU export `.zip` (or PDF + `layout.json`) onto the page:
 - **Lazy image loading** — only decode image cards near the viewport for large review jobs
 - **Replace / soft-delete / undo/redo** — replace an asset in-place or remove only its Markdown reference while retaining audit evidence
 - **Typora-style editing flow** — preview by default; double-click a rendered block to edit it in place
-- **Full source + Vim mode** — CodeMirror 6 fills the right pane, with an optional Vim keybinding plugin
+- **Full source + Vim mode** — CodeMirror 6 fills the right pane, with an optional Vim keybinding plugin; the rendered preview and live preview accept `:` commands (`:42` jumps to a source line, `:$` to the last line, `:w` saves, `:noh` clears search), normal-mode motions (`gg` / `G` with optional counts like `42G`), and `/` incremental search with `n` / `N`. Preview, live preview, and source mode share absolute, relative, or hidden line numbers; a multi-line preview block is labelled with its first source line only (a table spanning lines 4-9 is labelled `4`)
+- **Reveal in folder** — after the Windows shortcut opens a file or MinerU folder, the toolbar locates that file in Explorer
 - **Plugin APIs** — extend Markdown-it rendering/styles and CodeMirror editor extensions
 - **Find result navigator** — red preview highlights plus a clickable result list, replace-one, and replace-all
 - **Independent zoom** — PDF fit-page/fit-width/custom zoom and separate Markdown/image zoom
@@ -154,7 +156,7 @@ const sections = matchMarkdownToPdf(markdown, blocks)
 
 #### `parseBlocks(jsonStr: string): PdfBlock[]`
 
-Parses a MinerU JSON file (`layout.json`, `middle.json`, or `content_list.json`) into an array of leaf-level blocks.
+Parses a MinerU JSON file (`layout.json`, `middle.json`, `content_list.json`, or `content_list_v2.json`) into an array of leaf-level blocks. Page numbers, headers, footers, margin notes, and page footnotes are kept for PDF overlays and are not used as body matches.
 
 ```ts
 interface PdfBlock {
@@ -205,6 +207,7 @@ interface MdSection {
 | `loadMarkdownFile(file, handle?): Promise<void>` | Open one Markdown or Org file in standalone editor mode |
 | `loadLayoutFromJson(data: object\|string)`| Load layout JSON directly           |
 | `loadMarkdown(text: string)`            | Load markdown text directly           |
+| `revealSourceLine(line: number): boolean` | Scroll to a 1-based source line in the current Markdown or Org view |
 | `undoLastEdit(): Promise<void>`          | Undo the most recent image edit        |
 | `redoLastEdit(): Promise<void>`          | Redo the most recently undone edit     |
 | `exportEditedZip(): Promise<void>`       | Download the edited result ZIP         |
@@ -247,8 +250,9 @@ npx serve .
 | Format              | Structure                          | Origin    |
 |---------------------|------------------------------------|-----------|
 | `layout.json`       | `{ pdf_info: [{ preproc_blocks }] }` | top-left  |
-| `middle.json`       | `{ pdf_info: [{ preproc_blocks }] }` | top-left  |
+| `middle.json`       | `{ pdf_info: [{ para_blocks, discarded_blocks }] }` | top-left  |
 | `content_list.json` | `[{ page_idx, bbox, text }]`       | 0–1000    |
+| `content_list_v2.json` | `[[{ type, content, bbox }]]` grouped by page | 0–1000 |
 
 ### License
 
@@ -265,9 +269,20 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 或 PDF Worker 无法正常工作。
 
 首次使用可运行 `install-windows-integration.cmd`：它会创建带专用图标的桌面
-快捷方式，并把 MinerU Layout Viewer 加入 ZIP、Markdown、Org 的“打开方式”。
-也可以把这些文件或 MinerU 结果文件夹直接拖到快捷方式上。通过该方式打开的
-单个 Markdown/Org 文件支持覆盖保存回原文件。
+快捷方式，把 MinerU Layout Viewer 加入 ZIP、Markdown、Org 文件的“打开方式”，
+并为文件夹添加“用 MinerU Layout Viewer 打开”右键菜单。也可以把这些文件或
+MinerU 结果文件夹直接拖到快捷方式上。通过该方式打开的单个 Markdown/Org 文件
+支持覆盖保存回原文件。
+
+启动时可以指定源码行号。查看器会打开文件或 MinerU 结果，并滚动到该行：预览和实时预览高亮包含这一行的块，已匹配的 PDF 会同步定位；源码模式则把光标放到该行。行号从 1 开始。通过这种方式打开后，工具栏的「所在文件夹」会在资源管理器中定位当前文件。
+
+```bat
+start-viewer.cmd D:\notes\file.org +120
+start-viewer.cmd --line 120 D:\notes\file.md
+start-viewer.cmd D:\notes\file.md:120
+```
+
+`文件:行号` 只在去掉后缀后的路径真实存在时生效，因此普通的 `C:\目录\文件.md` 不会被误当成行号。`:行号:列号` 也可以识别，列号会被忽略。显式的 `+行号` 或 `--line` 优先于路径后缀。
 
 ### 演示
 
@@ -285,7 +300,8 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 
 - **双栏对照** — 左侧 PDF 页面，右侧 Markdown 文本
 - **双向定位** — 点击 Markdown 行 → 滚动到对应 PDF 块并高亮；点击 PDF 覆盖块 → 滚动到匹配的 Markdown 行
-- **多格式支持** — 自动识别 `layout.json`、`middle.json`、`content_list.json`
+- **多格式支持** — 自动识别 `layout.json`、`middle.json`、`content_list.json`、`content_list_v2.json`；页眉、页脚和边注画在 PDF 上，Markdown 预览在每页内容后显示「第 N 页」。改过的正文仍按未改动的原文对齐页码
+- **Markdown / JSON 切换** — 右侧可切换两种视图；修改一边的正文，另一边同步，保存时两个文件一起写回
 - **嵌套块解析** — 将列表项、表格单元格等嵌套块解析到叶子节点坐标
 - **框架无关** — 基于 Web Component，支持 React、Vue 或原生 HTML
 - **Zip 直拖** — 直接拖放 MinerU 输出 `.zip`，自动解压 PDF + layout + markdown
@@ -301,12 +317,14 @@ Windows 用户可直接双击项目根目录的 `start-viewer.cmd`。脚本会�
 - **单 Markdown 编辑器** — `code` 模式的源码/渲染支持左右或上下排列、拖动比例、中线交换和双向定位
 - **Typora 式混合编辑** — 聚焦当前块时显示真实 Markdown/Org 标记并进行语法着色，同时保留粗体、斜体、标题和公式源码的语义样式
 - **单 Org 编辑器** — `.org` 文件同样支持预览/实时预览/Code/Vim、大纲、搜索替换、历史、缩放、布局和覆盖保存
+- **思维导图** — 把 Markdown/Org 的标题与嵌套列表展开成右向树，节点按行内 Markdown 渲染，可按层级（1/2/3 级）折叠、缩放、拖拽换层级；双击改文字，`Enter`/`Tab`/`Shift+Tab`/`Delete` 增删改结构，全部实时回写源码并可撤销
+- **同窗口分屏** — 「右分屏 / 下分屏」把 Markdown 区分成多栏，每栏还能继续再分（左右套上下等不对称布局），各栏独立切换预览/实时预览/code/思维导图，修改实时双向同步；切换模式时自动跟随光标所在源码行
 - **Org 元数据与代码渲染** — 支持源码/示例块、固定宽度代码行、计划时间戳、属性抽屉，以及有无分隔行的 Org 表格
 - **Markdown 格式化预览** — 渲染标题、列表、引用、表格、代码、链接和懒加载图片
 - **图片懒加载** — 只解压接近可视区域的图片，降低大批量审核时的内存占用
 - **替换、软删除、撤销/重做** — 原路径替换图片，或仅删除 Markdown 引用并保留审核证据
 - **类 Typora 编辑流程** — 默认预览，双击渲染块后直接在原位置编辑
-- **全文源码与 Vim** — CodeMirror 6 直接占据右栏，并支持可开关的 Vim 键位插件
+- **全文源码与 Vim** — CodeMirror 6 直接占据右栏，并支持可开关的 Vim 键位插件；预览与实时预览里也能用 Vim：`:` 命令行（`:42` 定位、`:$` 末行、`:w` 覆盖保存、`:noh` 清除搜索）、普通模式动作（`gg` / `G`，支持 `42G`、`3gg` 计数）、`/` 增量搜索与 `n` / `N` 跳转。预览、实时预览和源码共用行号开关，可选关闭、绝对或相对；多行块只标注首个源码行（跨 4-9 行的表格标为 `4`）
 - **插件接口** — 可扩展 Markdown-it 渲染规则/样式和 CodeMirror 编辑扩展
 - **搜索结果导航** — 预览内红色高亮，并提供可点击跳转的结果列表、单项替换和全部替换
 - **左右独立缩放** — PDF 支持整页、页宽和自定义缩放，Markdown 与图片可单独缩放
@@ -405,7 +423,7 @@ const sections = matchMarkdownToPdf(markdown, blocks)
 
 #### `parseBlocks(jsonStr: string): PdfBlock[]`
 
-将 MinerU JSON 文件（`layout.json`、`middle.json` 或 `content_list.json`）解析为叶子级 block 数组。
+将 MinerU JSON 文件（`layout.json`、`middle.json`、`content_list.json` 或 `content_list_v2.json`）解析为叶子级 block 数组。页眉、页脚、边注和页脚注会画在 PDF 上，但不参与正文匹配。Markdown 预览会在每一页匹配内容结束后显示「第 N 页」。改写或增删的段落会留在前后未改行所在的页，页码不会被后文吸走。
 
 ```ts
 interface PdfBlock {
@@ -456,6 +474,7 @@ interface MdSection {
 | `loadMarkdownFile(file, handle?): Promise<void>` | 以独立 Markdown 或 Org 编辑器模式打开单文件 |
 | `loadLayoutFromJson(data: object\|string)`| 直接加载 layout JSON       |
 | `loadMarkdown(text: string)`            | 直接加载 markdown 文本      |
+| `revealSourceLine(line: number): boolean` | 滚动到从 1 开始的源码行。预览高亮所在块；源码模式移动光标 |
 | `undoLastEdit(): Promise<void>`          | 撤销最近一次图片修改        |
 | `redoLastEdit(): Promise<void>`          | 重做最近撤销的修改          |
 | `exportEditedZip(): Promise<void>`       | 下载修改后的结果 ZIP        |
@@ -481,7 +500,7 @@ viewer.registerMarkdownRenderPlugin({
 `plugins/phycat-prussian-theme.js`。原主题的交叉斜线背景、霞鹜文楷和 Cascadia Code 字体均已保留；字体文件放在
 `plugins/phycat/`。插件会依次尝试当前页面相对路径、上级路径和站点根路径，并在字体不可用时回退到系统楷体；修改插件后需在设置中重新选择该文件，以更新浏览器保存的插件源码。
 查看器会把插件中的 `@font-face` 单独同步到页面级样式，避免字体声明停留在 Shadow DOM 中而不触发浏览器下载。
-原版 `phycat-prussian-theme.js` 与 `everforest-org-theme.js` 保持不变；新增的 `phycat-prussian-theme-v2.js` 与 `everforest-org-theme-v2.js` 会在正文标题左侧显示同字号、同颜色的 `H1`–`H6` 层级标记，并按标题等级逐级缩进。PDF 书签和 Markdown/Org 大纲也显示层级标记，并各自提供标题搜索框。
+原版 `phycat-prussian-theme.js` 与 `everforest-org-theme.js` 保持不变；`phycat-prussian-theme-v2.js` 与 `everforest-org-theme-v2.js` 会在正文标题左侧显示同字号、同颜色的 `H1`–`H6` 层级标记，并按标题等级逐级缩进。`phycat-prussian-theme-v3.js` 在此基础上跟随系统暗色：暗色下用深色纸面，H2 仍保留蓝底白字；浅色外观与 v2 一致。PDF 书签和 Markdown/Org 大纲也显示层级标记，并各自提供标题搜索框。
 
 单 Org 文件还可加载 `plugins/everforest-org-theme.js`。它根据提供的 Emacs
 `everforest-hard-light-theme.el` / `everforest-hard-dark-theme.el` 配色制作，包含 Org 标题层级、TODO/DONE、表格、代码块、任务列表和实时编辑状态样式。
@@ -515,8 +534,9 @@ npx serve .
 | 格式                | 结构                               | 坐标系   |
 |---------------------|------------------------------------|----------|
 | `layout.json`       | `{ pdf_info: [{ preproc_blocks }] }` | 左上角   |
-| `middle.json`       | `{ pdf_info: [{ preproc_blocks }] }` | 左上角   |
+| `middle.json`       | `{ pdf_info: [{ para_blocks, discarded_blocks }] }` | 左上角   |
 | `content_list.json` | `[{ page_idx, bbox, text }]`       | 0–1000   |
+| `content_list_v2.json` | 按页分组的 `[[{ type, content, bbox }]]` | 0–1000 |
 
 ### 许可证
 

@@ -1,3 +1,4 @@
+import { copyFileSync } from 'node:fs'
 import * as esbuild from 'esbuild'
 
 const shared = {
@@ -44,6 +45,11 @@ if (watch) {
   console.log('👀 watching...')
 } else {
   await Promise.all([ctx1.rebuild(), ctx2.rebuild(), ctx3.rebuild()])
+  // index.html loads pdf.js and jszip as plain <script> tags from dist/. Keep the
+  // local copies in sync with node_modules so the viewer never depends on a CDN.
+  copyFileSync('node_modules/pdfjs-dist/build/pdf.worker.min.js', 'dist/pdf.worker.min.js')
+  copyFileSync('node_modules/pdfjs-dist/build/pdf.min.js', 'dist/pdf.min.js')
+  copyFileSync('node_modules/jszip/dist/jszip.min.js', 'dist/jszip.min.js')
   console.log('✅ built viewer bundles + dist/match-worker.js')
   await ctx1.dispose()
   await ctx2.dispose()

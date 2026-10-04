@@ -33,6 +33,7 @@ export function orgToMarkdown(org: string): string {
 
   let block: 'src' | 'example' | 'quote' | null = null
   let propertyDrawer = false
+  let plainDrawer = false
   const converted = lines.map((line, lineIndex) => {
     const htmlTable = htmlTableRows.get(lineIndex)
     if (htmlTable) {
@@ -70,7 +71,7 @@ export function orgToMarkdown(org: string): string {
 
     if (/^\s*:PROPERTIES:\s*$/i.test(line)) {
       propertyDrawer = true
-      return '<dl class="org-properties">'
+      return `<dl class="org-properties"${sourceLineAttribute(lineIndex)}>`
     }
     if (propertyDrawer && /^\s*:END:\s*$/i.test(line)) {
       propertyDrawer = false
@@ -78,11 +79,20 @@ export function orgToMarkdown(org: string): string {
     }
     if (propertyDrawer) {
       const property = line.match(/^\s*:([^:]+):\s*(.*)$/)
-      if (property) return `<div class="org-property"><dt>${escapeHtml(property[1])}</dt><dd>${orgInlineToHtml(property[2])}</dd></div>`
+      if (property) return `<div class="org-property"${sourceLineAttribute(lineIndex)}><dt>${escapeHtml(property[1])}</dt><dd>${orgInlineToHtml(property[2])}</dd></div>`
     }
     if (/^\s*(?:(?:CLOSED|SCHEDULED|DEADLINE):\s*(?:\[[^\]]+\]|<[^>]+>)\s*)+$/i.test(line)) {
       const items = Array.from(line.matchAll(/(CLOSED|SCHEDULED|DEADLINE):\s*(\[[^\]]+\]|<[^>]+>)/gi))
-      return `<div class="org-planning">${items.map(item => `<span class="org-${item[1].toLowerCase()}"><strong>${item[1].toUpperCase()}:</strong> <time>${escapeHtml(item[2])}</time></span>`).join(' ')}</div>`
+      return `<div class="org-planning"${sourceLineAttribute(lineIndex)}>${items.map(item => `<span class="org-${item[1].toLowerCase()}"><strong>${item[1].toUpperCase()}:</strong> <time>${escapeHtml(item[2])}</time></span>`).join(' ')}</div>`
+    }
+    const drawer = line.match(/^\s*:([A-Za-z][A-Za-z0-9_-]*):\s*$/)
+    if (!plainDrawer && drawer && drawer[1].toUpperCase() !== 'END') {
+      plainDrawer = true
+      return `<div class="org-drawer" data-drawer="${escapeHtml(drawer[1])}"${sourceLineAttribute(lineIndex)}>`
+    }
+    if (plainDrawer && /^\s*:END:\s*$/i.test(line)) {
+      plainDrawer = false
+      return '</div>'
     }
 
     const heading = line.match(/^(\*+)\s+(.+)$/)
@@ -106,7 +116,7 @@ export function orgToMarkdown(org: string): string {
     if (isOrgTableLine(line)) return normalizeOrgTableLine(line)
     const fixedWidth = line.match(/^\s*:\s(.*)$/)
     if (fixedWidth) return `    ${fixedWidth[1]}`
-    return orgInlineToMarkdown(line)
+    return orgInlineToMarkdown(line.replace(/^(\s*)(\d+)\)(\s+)/, '$1$2.$3'))
   })
   return converted.map((line, index) => line + (endings[index] || '')).join('')
 }
@@ -126,6 +136,10 @@ function isOrgTableSeparator(line: string): boolean {
 function orgTableCells(line: string): string[] {
   const normalized = normalizeOrgTableLine(line)
   return normalized.slice(1, normalized.endsWith('|') ? -1 : undefined).split('|').map(cell => cell.trim())
+}
+
+function sourceLineAttribute(lineIndex: number): string {
+  return ` data-md-start-line="${lineIndex}" data-md-end-line="${lineIndex + 1}"`
 }
 
 function escapeHtml(source: string): string {

@@ -3,3 +3,7 @@ dist
 *.map
 __pycache__/
 *.pyc
+
+# 本地编辑器配置与工作记录，不纳入版本管理
+.cursor/
+.workbuddy/

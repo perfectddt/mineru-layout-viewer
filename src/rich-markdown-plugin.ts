@@ -26,6 +26,28 @@ export function createRichMarkdownPlugin(): MarkdownRenderPlugin {
           delimiters: ['dollars', 'brackets', 'beg_end'],
           katexOptions: { throwOnError: false, strict: 'ignore', output: 'mathml' },
         })
+      // Org planning, drawers and tables are one HTML tag per source line.
+      // CommonMark would keep reading until a blank line and hide the next
+      // heading or paragraph from preview, live edit and double-click.
+      renderer.block.ruler.before('html_block', 'single_line_html', (state, startLine, _endLine, silent) => {
+        const pos = state.bMarks[startLine] + state.tShift[startLine]
+        const max = state.eMarks[startLine]
+        if (state.src.charCodeAt(pos) !== 0x3C) return false
+        const line = state.src.slice(pos, max)
+        if (line.startsWith('<!--') && !line.includes('-->')) return false
+        if (line.startsWith('<?') && !line.includes('?>')) return false
+        const tag = /^<\/?([A-Za-z][A-Za-z0-9-]*)/.exec(line)
+        if (!tag || !/^<\/?[A-Za-z][^>\n]*>/.test(line)) return false
+        const name = tag[1].toLowerCase()
+        if (name === 'script' || name === 'style' || name === 'pre' || name === 'textarea') return false
+        if (name === 'http' || name === 'https' || name === 'mailto' || name === 'ftp') return false
+        if (silent) return true
+        const token = state.push('html_block', '', 0)
+        token.content = `${line}\n`
+        token.map = [startLine, startLine + 1]
+        state.line = startLine + 1
+        return true
+      })
     },
     styles: `
 .md-preview eq { display:inline-block; }
@@ -55,6 +77,14 @@ export function createElegantReadingTheme(): MarkdownRenderPlugin {
 .md-preview tr:nth-child(even) td { background:#f8fafc; }
 .md-preview hr { border:0; border-top:1px solid #dbe3ec; margin:1.8em 0; }
 .md-preview img.md-asset { border-radius:7px; box-shadow:0 4px 18px rgba(15,23,42,.10); }
+@media (prefers-color-scheme:dark) {
+  .md-preview { color:#dbe4f0; }
+  .md-preview h1,.md-preview h2 { border-bottom-color:#334155; }
+  .md-preview strong { color:#f8fafc; }
+  .md-preview tr:nth-child(even) td { background:#111827; }
+  .md-preview hr { border-top-color:#334155; }
+  .md-preview img.md-asset { box-shadow:0 4px 18px rgba(0,0,0,.35); }
+}
 `,
   }
 }

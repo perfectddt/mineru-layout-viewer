@@ -10,6 +10,8 @@ export interface PdfBlock {
   text?: string
   type?: string
   imagePath?: string
+  /** Path into the parsed JSON, such as `0` or `pdf_info.0.para_blocks.1`. */
+  jsonPath?: string
 }
 
 export interface MdSection {
@@ -36,6 +38,23 @@ const VISUAL_TYPES = new Set([
   'chart-body',
   'chart_body',
 ])
+
+/** Page furniture MinerU keeps out of the Markdown body. */
+const PAGE_FURNITURE_TYPES = new Set([
+  'header',
+  'footer',
+  'page_number',
+  'page-number',
+  'page_header',
+  'page_footer',
+  'page_footnote',
+  'aside_text',
+  'page_aside_text',
+])
+
+export function isPageFurnitureType(type?: string): boolean {
+  return PAGE_FURNITURE_TYPES.has((type || '').toLowerCase())
+}
 
 export function normalizeAssetPath(path: string): string {
   let value = path.trim().replace(/^<|>$/g, '')
@@ -79,6 +98,12 @@ export function extractImagePath(value: unknown): string | undefined {
     if (typeof object[key] === 'string' && object[key]) {
       return normalizeAssetPath(object[key] as string)
     }
+  }
+
+  const imageSource = object.image_source
+  if (imageSource && typeof imageSource === 'object') {
+    const path = (imageSource as JsonObject).path
+    if (typeof path === 'string' && path) return normalizeAssetPath(path)
   }
 
   for (const key of ['content', 'lines', 'spans', 'blocks', 'children']) {
@@ -136,22 +161,82 @@ function pageSizeFrom(page: JsonObject): [number, number] | undefined {
   return undefined
 }
 
-function contentListText(item: JsonObject): string {
-  if (typeof item.text === 'string') return item.text
+function textFromStructured(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) {
+    return value.map(textFromStructured).filter(Boolean).join('\n').trim()
+  }
+  if (!value || typeof value !== 'object') return ''
+  const object = value as JsonObject
+  if (typeof object.content === 'string' && object.content.trim()) return object.content.trim()
+  if (typeof object.text === 'string' && object.text.trim()) return object.text.trim()
+  if (Array.isArray(object.item_content)) return textFromStructured(object.item_content)
+
+  const parts: string[] = []
+  for (const [key, child] of Object.entries(object)) {
+    if ([
+      'image_source', 'math_type', 'level', 'table_type', 'table_nest_level',
+      'list_type', 'code_language', 'sub_type', 'item_type', 'path', 'url', 'type',
+    ].includes(key)) continue
+    const text = textFromStructured(child)
+    if (text) parts.push(text)
+  }
+  return parts.join('\n').trim()
+}
+
+function captionText(item: JsonObject): string {
   for (const key of [
     'image_caption',
     'chart_caption',
     'table_caption',
     'image_footnote',
     'chart_footnote',
+    'code_caption',
   ]) {
     const value = item[key]
-    if (Array.isArray(value)) {
-      const text = value.filter(v => typeof v === 'string').join(' ')
+    if (Array.isArray(value) && value.every(entry => typeof entry === 'string')) {
+      const text = value.filter(Boolean).join(' ')
       if (text) return text
     }
+    const text = textFromStructured(value)
+    if (text) return text
   }
   return ''
+}
+
+function contentListText(item: JsonObject): string {
+  if (typeof item.text === 'string' && item.text.trim()) return item.text
+  const caption = captionText(item)
+  const listItems = textFromStructured(item.list_items)
+  const codeBody = typeof item.code_body === 'string' ? item.code_body.trim() : ''
+  const structured = item.content && typeof item.content === 'object'
+    ? textFromStructured(item.content)
+    : ''
+  const combined = [caption, listItems, codeBody, structured].filter(Boolean).join('\n')
+  if (combined) return combined
+  if (typeof item.table_body === 'string' && item.table_body.trim()) return item.table_body
+  return ''
+}
+
+function furnitureKey(block: PdfBlock): string {
+  const box = block.bbox.map(value => value.toFixed(3)).join(',')
+  const text = (block.text || '').replace(/\s+/g, ' ').trim()
+  return `${block.page_idx}|${(block.type || '').toLowerCase()}|${box}|${text}`
+}
+
+/** Add page numbers, headers, footers, and notes that the primary JSON omitted. */
+export function appendPageFurniture(blocks: PdfBlock[], extras: PdfBlock[]): PdfBlock[] {
+  const incoming = extras.filter(block => isPageFurnitureType(block.type))
+  if (!incoming.length) return blocks
+  const seen = new Set(blocks.filter(block => isPageFurnitureType(block.type)).map(furnitureKey))
+  const merged = blocks.slice()
+  for (const block of incoming) {
+    const key = furnitureKey(block)
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push({ ...block, id: `page-furniture:${merged.length}`, jsonPath: undefined })
+  }
+  return merged
 }
 
 // ── Block parser (supports layout.json, middle.json, content_list.json) ──
@@ -165,6 +250,7 @@ export function parseBlocks(jsonStr: string): PdfBlock[] {
     pageIdx: number,
     bbox: [number, number, number, number],
     source: string,
+    jsonPath?: string,
   ) => {
     const type = normalizeType(item.category || item.type)
     const imagePath = extractImagePath(item)
@@ -176,6 +262,7 @@ export function parseBlocks(jsonStr: string): PdfBlock[] {
       text,
       type,
       imagePath,
+      jsonPath,
     })
   }
 
@@ -186,10 +273,12 @@ export function parseBlocks(jsonStr: string): PdfBlock[] {
       const walkLayout = (
         items: JsonObject[],
         pageIdx: number,
-        pageSize?: [number, number],
-        insideVisual = false,
+        pageSize: [number, number] | undefined,
+        insideVisual: boolean,
+        pathPrefix: string,
       ) => {
-        for (const item of items) {
+        items.forEach((item, index) => {
+          const path = `${pathPrefix}.${index}`
           const bbox = normalizeBbox(item.bbox, pageSize)
           const type = normalizeType(item.type)
           const childBlocks = item.blocks as JsonObject[] | undefined
@@ -198,36 +287,58 @@ export function parseBlocks(jsonStr: string): PdfBlock[] {
           // Keep visual parents: descending directly into image_body used to
           // discard image_path and made image blocks impossible to match.
           if (bbox && isVisual && !insideVisual) {
-            addBlock(item, pageIdx, bbox, 'middle')
+            addBlock(item, pageIdx, bbox, 'middle', path)
           }
 
           if (childBlocks?.length) {
-            walkLayout(childBlocks, pageIdx, pageSize, insideVisual || isVisual)
+            walkLayout(childBlocks, pageIdx, pageSize, insideVisual || isVisual, `${path}.blocks`)
           } else if (bbox && !VISUAL_TYPES.has(type || '') && !extractImagePath(item)) {
-            addBlock(item, pageIdx, bbox, 'middle')
+            addBlock(item, pageIdx, bbox, 'middle', path)
           }
-        }
+        })
       }
 
       for (let i = 0; i < data.pdf_info.length; i++) {
         const page = data.pdf_info[i] as JsonObject
+        const pageSize = pageSizeFrom(page)
         const blocks = (page.para_blocks || page.preproc_blocks || []) as JsonObject[]
-        walkLayout(blocks, i, pageSizeFrom(page))
+        const blockKey = page.para_blocks ? 'para_blocks' : 'preproc_blocks'
+        walkLayout(blocks, i, pageSize, false, `pdf_info.${i}.${blockKey}`)
+        const discarded = page.discarded_blocks
+        if (Array.isArray(discarded)) {
+          walkLayout(discarded as JsonObject[], i, pageSize, false, `pdf_info.${i}.discarded_blocks`)
+        }
       }
       return result
     }
 
     if (!Array.isArray(data)) return result
-    const walk = (items: JsonObject[], inheritedPage?: number) => {
-      for (const item of items) {
+    if (data.some(page => Array.isArray(page))) {
+      data.forEach((page, pageIdx) => {
+        if (!Array.isArray(page)) return
+        page.forEach((item, index) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) return
+          const object = item as JsonObject
+          const explicitPage = Number(object.page_idx ?? object.page_index)
+          const resolvedPage = Number.isFinite(explicitPage) ? explicitPage : pageIdx
+          const bbox = normalizeBbox(object.bbox)
+          if (bbox) addBlock(object, resolvedPage, bbox, 'content-v2', `${pageIdx}.${index}`)
+        })
+      })
+      return result
+    }
+
+    const walk = (items: JsonObject[], inheritedPage?: number, pathPrefix = '') => {
+      items.forEach((item, index) => {
+        const path = pathPrefix ? `${pathPrefix}.${index}` : String(index)
         const pageIdx = Number(item.page_idx ?? item.page_index ?? inheritedPage)
         const bbox = normalizeBbox(item.bbox, undefined, true)
         if (Number.isFinite(pageIdx) && bbox) {
-          addBlock(item, pageIdx, bbox, 'content')
+          addBlock(item, pageIdx, bbox, 'content', path)
         }
-        if (Array.isArray(item.children)) walk(item.children as JsonObject[], pageIdx)
-        if (Array.isArray(item.blocks)) walk(item.blocks as JsonObject[], pageIdx)
-      }
+        if (Array.isArray(item.children)) walk(item.children as JsonObject[], pageIdx, `${path}.children`)
+        if (Array.isArray(item.blocks)) walk(item.blocks as JsonObject[], pageIdx, `${path}.blocks`)
+      })
     }
     walk(data)
   } catch {

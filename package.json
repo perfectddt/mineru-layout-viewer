@@ -26,7 +26,7 @@
   "scripts": {
     "build": "tsc --noEmit && node build.mjs",
     "dev": "node build.mjs --watch",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "test": "npm run build && node --test tests",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -51,6 +51,7 @@
   "devDependencies": {
     "@types/markdown-it": "^14.2.0",
     "esbuild": "^0.24.0",
+    "pdfjs-dist": "^3.11.174",
     "typescript": "^5.6.0"
   },
   "dependencies": {

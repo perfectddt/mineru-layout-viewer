@@ -4,12 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>mineru-layout-viewer 测试</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="./dist/mineru-layout-viewer.iife.js?v=20260901-pdf-virtual-2"></script>
+<!-- 本地副本来自 node_modules（pdfjs-dist 3.11.174 / jszip 3.10.1），
+     避免 cdnjs 不可达时同步 script 卡住导致整页脚本中断。 -->
+<script src="./dist/pdf.min.js?v=20261004-offline"></script>
+<script src="./dist/jszip.min.js?v=20261004-offline"></script>
+<script src="./dist/mineru-layout-viewer.iife.js?v=20261002-mindmap-5"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { height: 100vh; display:flex; flex-direction:column; font-family: system-ui, sans-serif; }
+body { height: 100vh; display:flex; flex-direction:column; font-family: system-ui, sans-serif; color:#0f172a; background:#f8fafc; }
 .drop-zone {
   flex:1; min-height:0; display: flex; align-items: center; justify-content: center; margin: 20px;
   border: 2px dashed #d0d0d0; border-radius: 12px; cursor: pointer; transition: all .2s;
@@ -25,15 +27,38 @@ body { height: 100vh; display:flex; flex-direction:column; font-family: system-u
 .load-status { min-height:20px; margin-top:10px; color:#2563eb; font-size:12px; }
 .hidden { display: none !important; }
 .app-toolbar { flex:0 0 42px; display:flex; align-items:center; padding:5px 10px; border-bottom:1px solid #e5e7eb; background:#f8fafc; }
+.app-toolbar { gap:6px; }
+body:has(#viewer:not(.hidden)) .app-toolbar { position:absolute; z-index:40; top:7px; left:10px; flex:none; height:auto; padding:0; border:0; background:transparent; }
+body:has(#viewer:not(.hidden)) #viewer { --toolbar-leading: 148px; }
+body:has(#viewer:not(.hidden)) .recent-launcher > button { padding:5px 9px; border-radius:5px; font-size:12px; }
+body:has(#viewer:not(.hidden)) #returnHome { display:block; padding:5px 9px; border-radius:5px; font-size:12px; }
 .recent-launcher { position:relative; z-index:10000; }
-.recent-launcher > button { border:1px solid #cbd5e1; border-radius:7px; padding:7px 11px; background:#fff; cursor:pointer; }
-.recent-panel { position:absolute; top:37px; left:0; width:340px; max-height:65vh; overflow:auto; padding:10px; border:1px solid #d8dee8; border-radius:9px; background:#fff; box-shadow:0 12px 35px #0003; }
+.recent-launcher > button { border:1px solid #cbd5e1; border-radius:7px; padding:7px 11px; background:#fff; cursor:pointer; color:inherit; }
+#returnHome { display:none; border:1px solid #cbd5e1; background:#fff; cursor:pointer; color:inherit; }
+.recent-panel { position:absolute; top:calc(100% + 6px); left:0; width:340px; max-height:65vh; overflow:auto; padding:10px; border:1px solid #d8dee8; border-radius:9px; background:#fff; box-shadow:0 12px 35px #0003; }
 .recent-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:7px; font-size:13px; font-weight:600; }
 .recent-head button, .recent-remove { border:0; background:transparent; color:#64748b; cursor:pointer; }
 .recent-item { display:flex; gap:6px; align-items:center; border-top:1px solid #eef2f7; }
-.recent-open { flex:1; min-width:0; padding:9px 3px; border:0; background:transparent; text-align:left; cursor:pointer; }
+.recent-open { flex:1; min-width:0; padding:9px 3px; border:0; background:transparent; text-align:left; cursor:pointer; color:inherit; }
 .recent-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#1e293b; }
 .recent-meta { display:block; margin-top:2px; color:#94a3b8; font-size:11px; }
+@media (prefers-color-scheme: dark) {
+  body { color:#e5e7eb; background:#0f172a; }
+  .app-toolbar { border-bottom-color:#334155; background:#111827; }
+  .recent-launcher > button { border-color:#475569; background:#1f2937; color:#e5e7eb; }
+  #returnHome { border-color:#475569; background:#1f2937; color:#e5e7eb; }
+  .recent-panel { border-color:#475569; background:#1f2937; box-shadow:0 12px 35px #0008; }
+  .recent-head button, .recent-remove { color:#94a3b8; }
+  .recent-item { border-top-color:#334155; }
+  .recent-name { color:#f1f5f9; }
+  .drop-zone { border-color:#475569; }
+  .drop-zone:hover, .drop-zone.drag-over { border-color:#60a5fa; background:rgba(96,165,250,.08); }
+  .drop-zone .hint { color:#94a3b8; }
+  .drop-zone .hint h3 { color:#e2e8f0; }
+  .drop-zone .hint a, .load-status { color:#93c5fd; }
+  .choices button { border-color:#60a5fa; background:#1f2937; color:#93c5fd; }
+  .choices button.primary { background:#2563eb; color:#fff; }
+}
 </style>
 </head>
 <body>
@@ -45,7 +70,9 @@ body { height: 100vh; display:flex; flex-direction:column; font-family: system-u
       <div id="recentList"></div>
     </div>
   </div>
+  <button id="returnHome" type="button" title="返回文件选择主页">返回主页</button>
 </div>
+
 
 <div id="dropZone" class="drop-zone">
   <div class="hint">
@@ -71,7 +98,7 @@ body { height: 100vh; display:flex; flex-direction:column; font-family: system-u
 </mineru-layout-viewer>
 
 <script>
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+pdfjsLib.GlobalWorkerOptions.workerSrc = './dist/pdf.worker.min.js'
 
 const dropZone = document.getElementById('dropZone')
 const viewer = document.getElementById('viewer')
@@ -173,8 +200,36 @@ async function openRecent(item) {
 }
 
 document.getElementById('recentToggle').onclick = () => recentPanel.classList.toggle('hidden')
+// 新窗口收到同源文档广播后，需要把首页切到查看器
+viewer.addEventListener('mineru-viewer-show-document', () => {
+  dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
+})
 document.getElementById('recentClear').onclick = () => saveRecents([])
 renderRecents()
+
+document.getElementById('returnHome').addEventListener('click', () => {
+  if (viewer.hasPendingChanges() && !confirm('当前文件有尚未导出的修改。返回主页后这些修改将丢失，确定继续吗？')) return
+  recentPanel.classList.add('hidden')
+  viewer.classList.add('hidden')
+  dropZone.classList.remove('hidden')
+  loadStatus.textContent = ''
+  const homeUrl = new URL(location.href)
+  homeUrl.search = ''
+  homeUrl.hash = ''
+  if (launcherToken) homeUrl.searchParams.set('token', launcherToken)
+  history.replaceState(null, '', `${homeUrl.pathname}${homeUrl.search}`)
+})
+
+function launchLineNumber() {
+  const raw = new URLSearchParams(location.search).get('line')
+  if (!raw || !/^[1-9]\d{0,7}$/.test(raw)) return 0
+  return Number(raw)
+}
+
+function revealLaunchLine() {
+  const line = launchLineNumber()
+  if (line) viewer.revealSourceLine(line)
+}
 
 async function loadLauncherTarget() {
   const params = new URLSearchParams(location.search)
@@ -191,7 +246,9 @@ async function loadLauncherTarget() {
     rememberRecent({ id:`launcher:${manifest.path}`, source:'launcher', kind:manifest.kind, name:manifest.name, path:manifest.path })
     dropZone.classList.add('hidden'); viewer.classList.remove('hidden')
     if (manifest.kind === 'file') {
-      const blob = await fetch(`/__viewer/file?${query}`).then(response => response.blob())
+      const fileResponse = await fetch(`/__viewer/file?${query}`)
+      if (!fileResponse.ok) throw new Error(`读取启动文件失败：HTTP ${fileResponse.status}`)
+      const blob = await fileResponse.blob()
       let currentFile = new File([blob], manifest.name, { type: blob.type })
       if (/\.(?:md|markdown|org)$/i.test(manifest.name)) {
         const localHandle = {
@@ -210,10 +267,12 @@ async function loadLauncherTarget() {
             }
           },
         }
-        await viewer.loadMarkdownFile(currentFile, localHandle)
+        await viewer.loadMarkdownFile(currentFile, localHandle, { siblingAssets: { token, launch } })
       } else {
         await handleFiles([currentFile])
       }
+      revealLaunchLine()
+      viewer.setLauncherLocation({ token, launch, kind: 'file' })
       return
     }
     const entries = []
@@ -222,14 +281,22 @@ async function loadLauncherTarget() {
     for (let index = 0; index < manifest.files.length; index++) {
       const path = manifest.files[index]
       if (path === directPdfPath) continue
+      if (/\.(?:png|jpe?g|gif|webp|bmp|svg|avif|tiff?)$/i.test(path)) {
+        entries.push({ path, url: `/__viewer/file?${query}&path=${encodeURIComponent(path)}` })
+        continue
+      }
       loadStatus.textContent = `正在读取文件夹：${index + 1}/${manifest.files.length}`
-      const blob = await fetch(`/__viewer/file?${query}&path=${encodeURIComponent(path)}`).then(response => response.blob())
+      const fileResponse = await fetch(`/__viewer/file?${query}&path=${encodeURIComponent(path)}`)
+      if (!fileResponse.ok) throw new Error(`读取 ${path} 失败：HTTP ${fileResponse.status}`)
+      const blob = await fileResponse.blob()
       entries.push({ path, file: new File([blob], path.split('/').pop(), { type: blob.type }) })
     }
     const directPdfUrl = directPdfPath
       ? `/__viewer/file?${query}&path=${encodeURIComponent(directPdfPath)}`
       : undefined
     await viewer.loadDirectoryEntries(entries, directPdfUrl, directPdfPath)
+    revealLaunchLine()
+    viewer.setLauncherLocation({ token, launch, kind: 'directory' })
   } catch (error) {
     viewer.classList.add('hidden'); dropZone.classList.remove('hidden')
     loadStatus.textContent = error instanceof Error ? error.message : String(error)
@@ -246,6 +313,29 @@ document.getElementById('chooseZip').addEventListener('click', e => {
 
 document.getElementById('chooseFolder').addEventListener('click', async e => {
   e.stopPropagation()
+  if (launcherToken && ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname)) {
+    const button = e.currentTarget
+    button.disabled = true
+    try {
+      const identityResponse = await fetch(`/__viewer/identity?token=${encodeURIComponent(launcherToken)}`)
+      if (!identityResponse.ok || (await identityResponse.json()).app !== 'mineru-layout-viewer') {
+        throw new Error('本地查看器服务授权已失效，请从快捷方式重新打开查看器')
+      }
+      loadStatus.textContent = '请选择 MinerU 结果文件夹…'
+      const response = await fetch(`/__viewer/choose-directory?token=${encodeURIComponent(launcherToken)}`, { method: 'POST' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(`本地文件夹选择失败：${result.error || response.status}`)
+      if (result.cancelled) { loadStatus.textContent = '已取消选择文件夹'; return }
+      history.replaceState(null, '', result.url)
+      await loadLauncherTarget()
+    } catch (error) {
+      loadStatus.textContent = error instanceof Error ? error.message : String(error)
+      alert(loadStatus.textContent)
+    } finally {
+      button.disabled = false
+    }
+    return
+  }
   if ('showDirectoryPicker' in window) {
     let handle
     try {
